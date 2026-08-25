@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Hidrogeron | Gestão de Manutenção</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { font-family: 'Inter', system-ui, sans-serif; }
+  html, body { -webkit-tap-highlight-color: transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  .fade-enter-active, .fade-leave-active { transition: opacity .15s ease; }
+  .fade-enter-from, .fade-leave-to { opacity: 0; }
+  .btn-tap { transition: transform .05s ease; }
+  .btn-tap:active { transform: scale(0.96); }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.4); border-top-color: #fff;
+    animation: spin .7s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen">
+<div id="app"></div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, watch } = Vue;
+
+/* ==========================================================================
+   CONFIGURAÇÃO
+   ========================================================================== */
+const API_URL = "https://script.google.com/macros/s/AKfycbxeM7DmvSrJW_uzm30LRwZsZnlQQO5MNwNzmC75dLd5lwJB1MFfZnQRIHuF2ihBl0_U/exec";
+const STORAGE_USER_KEY = "hidrogeron_user";
+
+const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidráulica", "Oficina"];
+const PRIORIDADES = [
+  { value: "Baixa",   color: "bg-slate-100 text-slate-700 border-slate-300" },
+  { value: "Média",   color: "bg-amber-100 text-amber-700 border-amber-300" },
+  { value: "Alta",    color: "bg-orange-100 text-orange-700 border-orange-300" },
+  { value: "Crítica", color: "bg-red-100 text-red-700 border-red-300" },
+];
+
+/* ==========================================================================
+   HELPERS DE API (JSONP-safe via fetch; Apps Script Web App aceita CORS
+   simples em GET e POST com text/plain para evitar preflight)
+   ========================================================================== */
+async function apiGet(params) {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${API_URL}?${qs}`, { method: "GET", redirect: "follow" });
+  if (!res.ok) throw new Error("Falha na comunicação com o servidor (" + res.status + ")");
+  return res.json();
+}
+
+async function apiPost(payload) {
+  const res = await fetch(API_URL, {
+    method: "POST",
+    redirect: "follow",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Falha na comunicação com o servidor (" + res.status + ")");
+  return res.json();
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function nowISO() {
+  return new Date().toISOString();
+}
+
+/* ==========================================================================
+   TOAST / NOTIFICAÇÕES
+   ========================================================================== */
+const toasts = reactive([]);
+function pushToast(message, type = "info") {
+  const id = uid();
+  toasts.push({ id, message, type });
+  setTimeout(() => {
+    const idx = toasts.findIndex(t => t.id === id);
+    if (idx !== -1) toasts.splice(idx, 1);
+  }, 4000);
+}
+
+const ToastHost = {
+  setup() {
+    return { toasts };
+  },
+  template: `
+  <div class="fixed top-3 right-3 left-3 sm:left-auto z-[100] flex flex-col gap-2 sm:w-96 pointer-events-none">
+    <transition-group name="fade">
+      <div v-for="t in toasts" :key="t.id"
+        class="pointer-events-auto rounded-xl shadow-lg px-4 py-3 text-sm font-medium border flex items-start gap-2"
+        :class="{
+          'bg-emerald-50 text-emerald-800 border-emerald-200': t.type === 'success',
+          'bg-red-50 text-red-800 border-red-200': t.type === 'error',
+          'bg-sky-50 text-sky-800 border-sky-200': t.type === 'info'
+        }">
+        <span v-if="t.type === 'success'">✅</span>
+        <span v-if="t.type === 'error'">⚠️</span>
+        <span v-if="t.type === 'info'">ℹ️</span>
+        <span>{{ t.message }}</span>
+      </div>
+    </transition-group>
+  </div>`
+};
+
+/* ==========================================================================
+   TELA DE LOGIN
+   ========================================================================== */
+const LoginScreen = {
+  emits: ["login-success"],
+  setup(_, { emit }) {
+    const email = ref("");
+    const pin = ref("");
+    const loading = ref(false);
+    const errorMsg = ref("");
+
+    async function handleLogin() {
+      errorMsg.value = "";
+      if (!email.value.trim() || !pin.value.trim()) {
+        errorMsg.value = "Informe e-mail e PIN.";
+        return;
+      }
+      loading.value = true;
+      try {
+        const data = await apiGet({ action: "getInitialData" });
+        if (!data || data.status === "error") {
+          throw new Error((data && data.message) || "Não foi possível carregar os dados iniciais.");
+        }
+        const usuarios = data.usuarios || data.Usuarios || (data.data && data.data.usuarios) || [];
+        const emailInput = email.value.trim().toLowerCase();
+        const pinInput = pin.value.trim();
+
+        const found = usuarios.find(u => {
+          const uEmail = String(u.Email || u.email || "").trim().toLowerCase();
+          const uPin = String(u.PIN || u.Pin || u.pin || "").trim();
+          return uEmail === emailInput && uPin === pinInput;
+        });
+
+        if (!found) {
+          errorMsg.value = "E-mail ou PIN inválidos.";
+          loading.value = false;
+          return;
+        }
+
+        const user = {
+          nome: found.Nome || found.nome || found.Name || "Usuário",
+          email: found.Email || found.email,
+          cargo: found.Cargo || found.cargo || found.Funcao || found.funcao || "",
+          area: found.Area || found.area || "",
+        };
+        localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
+        pushToast(`Bem-vindo, ${user.nome}!`, "success");
+        emit("login-success", user);
+      } catch (err) {
+        console.error(err);
+        errorMsg.value = "Erro ao conectar com o servidor. Verifique sua conexão e tente novamente.";
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    return { email, pin, loading, errorMsg, handleLogin };
+  },
+  template: `
+  <div class="min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-slate-900 via-slate-800 to-sky-900">
+    <div class="w-full max-w-sm">
+      <div class="text-center mb-8">
+        <div class="mx-auto w-16 h-16 rounded-2xl bg-sky-500 flex items-center justify-center shadow-lg mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-9 h-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11 21h2m-2-3h2M4 21V9a1 1 0 011-1h3V4a1 1 0 011-1h6a1 1 0 011 1v4h3a1 1 0 011 1v12M9 8h6M9 12h6M9 16h2"/>
+          </svg>
+        </div>
+        <h1 class="text-2xl font-extrabold text-white tracking-tight">Hidrogeron</h1>
+        <p class="text-slate-300 text-sm mt-1">Gestão de Manutenção Preventiva e Corretiva</p>
+      </div>
+
+      <form @submit.prevent="handleLogin" class="bg-white rounded-2xl shadow-2xl p-6 space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">E-mail</label>
+          <input v-model="email" type="email" autocomplete="username" placeholder="seuemail@hidrogeron.com"
+            class="w-full rounded-xl border border-slate-300 px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">PIN</label>
+          <input v-model="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="••••"
+            class="w-full rounded-xl border border-slate-300 px-4 py-3 text-base tracking-widest focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent" />
+        </div>
+
+        <p v-if="errorMsg" class="text-red-600 text-sm font-medium">{{ errorMsg }}</p>
+
+        <button type="submit" :disabled="loading"
+          class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl shadow-md transition-colors">
+          <span v-if="loading" class="spinner"></span>
+          <span>{{ loading ? "Entrando..." : "Entrar" }}</span>
+        </button>
+      </form>
+      <p class="text-center text-slate-400 text-xs mt-6">© {{ new Date().getFullYear() }} Hidrogeron — Sistema Interno de Manutenção</p>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO PREVENTIVA
+   ========================================================================== */
+const PreventivaModule = {
+  props: { user: Object },
+  setup(props) {
+    const areas = AREAS;
+    const areaSelecionada = ref(areas[0]);
+    const equipamentos = ref([]);
+    const loadingEquip = ref(false);
+    const salvando = ref(false);
+    const observacoes = reactive({});
+    const status = reactive({}); // { equipId: 'C' | 'NC' | 'NA' }
+    const erroCarregamento = ref("");
+
+    async function carregarEquipamentos() {
+      loadingEquip.value = true;
+      erroCarregamento.value = "";
+      equipamentos.value = [];
+      try {
+        const data = await apiGet({ action: "getInitialData" });
+        const todos = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        equipamentos.value = todos.filter(e => {
+          const a = String(e.Area || e.area || "").trim().toLowerCase();
+          return a === areaSelecionada.value.trim().toLowerCase();
+        }).map(e => ({
+          id: e.ID || e.Id || e.id || uid(),
+          nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          tag: e.TAG || e.Tag || e.tag || "",
+        }));
+        equipamentos.value.forEach(eq => {
+          if (!(eq.id in status)) status[eq.id] = null;
+          if (!(eq.id in observacoes)) observacoes[eq.id] = "";
+        });
+      } catch (err) {
+        console.error(err);
+        erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
+      } finally {
+        loadingEquip.value = false;
+      }
+    }
+
+    function setStatus(id, value) {
+      status[id] = status[id] === value ? null : value;
+    }
+
+    const progresso = computed(() => {
+      if (equipamentos.value.length === 0) return 0;
+      const preenchidos = equipamentos.value.filter(e => status[e.id]).length;
+      return Math.round((preenchidos / equipamentos.value.length) * 100);
+    });
+
+    async function enviarChecklist() {
+      const pendentes = equipamentos.value.filter(e => !status[e.id]);
+      if (equipamentos.value.length === 0) {
+        pushToast("Não há equipamentos para registrar nesta área.", "error");
+        return;
+      }
+      if (pendentes.length > 0) {
+        pushToast(`Classifique todos os itens antes de enviar (${pendentes.length} pendente(s)).`, "error");
+        return;
+      }
+      salvando.value = true;
+      try {
+        const itens = equipamentos.value.map(e => ({
+          equipamentoId: e.id,
+          equipamento: e.nome,
+          tag: e.tag,
+          status: status[e.id],
+          observacao: observacoes[e.id] || "",
+        }));
+        const payload = {
+          action: "savePreventiva",
+          area: areaSelecionada.value,
+          responsavel: props.user.nome,
+          email: props.user.email,
+          data: nowISO(),
+          itens,
+        };
+        const resp = await apiPost(payload);
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        pushToast("Checklist preventivo enviado com sucesso!", "success");
+        equipamentos.value.forEach(e => {
+          status[e.id] = null;
+          observacoes[e.id] = "";
+        });
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao enviar checklist. Tente novamente.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    onMounted(carregarEquipamentos);
+    watch(areaSelecionada, carregarEquipamentos);
+
+    return {
+      areas, areaSelecionada, equipamentos, loadingEquip, erroCarregamento,
+      status, observacoes, setStatus, progresso, salvando, enviarChecklist,
+    };
+  },
+  template: `
+  <div class="space-y-5">
+    <div>
+      <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Área</label>
+      <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+        <button v-for="a in areas" :key="a" @click="areaSelecionada = a"
+          class="btn-tap whitespace-nowrap px-4 py-2 rounded-full text-sm font-semibold border transition-colors"
+          :class="areaSelecionada === a ? 'bg-sky-600 border-sky-600 text-white shadow' : 'bg-white border-slate-300 text-slate-600'">
+          {{ a }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="equipamentos.length" class="bg-white rounded-xl border border-slate-200 p-4">
+      <div class="flex justify-between text-xs font-semibold text-slate-500 mb-1">
+        <span>Progresso do checklist</span>
+        <span>{{ progresso }}%</span>
+      </div>
+      <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+        <div class="h-full bg-sky-500 transition-all duration-300" :style="{ width: progresso + '%' }"></div>
+      </div>
+    </div>
+
+    <div v-if="loadingEquip" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+
+    <div v-else-if="erroCarregamento" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+      {{ erroCarregamento }}
+    </div>
+
+    <div v-else-if="equipamentos.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      Nenhum equipamento cadastrado para esta área.
+    </div>
+
+    <div v-else class="space-y-3">
+      <div v-for="eq in equipamentos" :key="eq.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <div class="flex items-start justify-between gap-2 mb-3">
+          <div>
+            <p class="font-semibold text-slate-800">{{ eq.nome }}</p>
+            <p v-if="eq.tag" class="text-xs text-slate-400 font-mono">{{ eq.tag }}</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <button @click="setStatus(eq.id, 'C')"
+            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+            :class="status[eq.id] === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
+            C
+          </button>
+          <button @click="setStatus(eq.id, 'NC')"
+            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+            :class="status[eq.id] === 'NC' ? 'bg-red-500 border-red-500 text-white' : 'bg-red-50 border-red-200 text-red-700'">
+            NC
+          </button>
+          <button @click="setStatus(eq.id, 'NA')"
+            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+            :class="status[eq.id] === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-600'">
+            NA
+          </button>
+        </div>
+        <textarea v-model="observacoes[eq.id]" rows="2" placeholder="Observações (opcional)"
+          class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+      </div>
+
+      <button @click="enviarChecklist" :disabled="salvando"
+        class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md mt-2 sticky bottom-3">
+        <span v-if="salvando" class="spinner"></span>
+        <span>{{ salvando ? "Enviando..." : "Enviar Checklist" }}</span>
+      </button>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO CORRETIVA
+   ========================================================================== */
+const CorretivaModule = {
+  props: { user: Object },
+  setup(props) {
+    const areas = AREAS;
+    const prioridades = PRIORIDADES;
+    const form = reactive({
+      area: areas[0],
+      equipamento: "",
+      prioridade: "Média",
+      descricao: "",
+    });
+    const enviando = ref(false);
+    const chamados = ref([]);
+    const loadingChamados = ref(true);
+    const erroChamados = ref("");
+
+    async function carregarChamados() {
+      loadingChamados.value = true;
+      erroChamados.value = "";
+      try {
+        const data = await apiGet({ action: "getInitialData" });
+        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
+        chamados.value = lista
+          .map(c => ({
+            id: c.ID || c.Id || c.id || uid(),
+            area: c.Area || c.area || "",
+            equipamento: c.Equipamento || c.equipamento || "",
+            prioridade: c.Prioridade || c.prioridade || "Média",
+            descricao: c.Descricao || c.descricao || "",
+            status: c.Status || c.status || "Aberto",
+            data: c.Data || c.data || c.DataAbertura || "",
+            solicitante: c.Solicitante || c.solicitante || c.Responsavel || "",
+          }))
+          .filter(c => String(c.status).toLowerCase() !== "concluído" && String(c.status).toLowerCase() !== "concluido")
+          .sort((a, b) => new Date(b.data) - new Date(a.data));
+      } catch (err) {
+        console.error(err);
+        erroChamados.value = "Não foi possível carregar os chamados abertos.";
+      } finally {
+        loadingChamados.value = false;
+      }
+    }
+
+    async function abrirChamado() {
+      if (!form.equipamento.trim()) {
+        pushToast("Informe o equipamento com falha.", "error");
+        return;
+      }
+      if (!form.descricao.trim()) {
+        pushToast("Descreva a falha observada.", "error");
+        return;
+      }
+      enviando.value = true;
+      try {
+        const payload = {
+          action: "saveCorretiva",
+          area: form.area,
+          equipamento: form.equipamento.trim(),
+          prioridade: form.prioridade,
+          descricao: form.descricao.trim(),
+          solicitante: props.user.nome,
+          email: props.user.email,
+          data: nowISO(),
+          status: "Aberto",
+        };
+        const resp = await apiPost(payload);
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        pushToast("Chamado aberto com sucesso!", "success");
+        form.equipamento = "";
+        form.descricao = "";
+        form.prioridade = "Média";
+        await carregarChamados();
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao abrir chamado. Tente novamente.", "error");
+      } finally {
+        enviando.value = false;
+      }
+    }
+
+    function corPrioridade(p) {
+      const found = prioridades.find(x => x.value === p);
+      return found ? found.color : "bg-slate-100 text-slate-700 border-slate-300";
+    }
+
+    function formatarData(iso) {
+      if (!iso) return "-";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    onMounted(carregarChamados);
+
+    return {
+      areas, prioridades, form, enviando, abrirChamado,
+      chamados, loadingChamados, erroChamados, corPrioridade, formatarData, carregarChamados,
+    };
+  },
+  template: `
+  <div class="space-y-6">
+    <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-4">
+      <h2 class="font-bold text-slate-800 flex items-center gap-2">
+        <span class="text-lg">🛠️</span> Abrir Chamado de Manutenção Corretiva
+      </h2>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Área</label>
+        <select v-model="form.area" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Equipamento</label>
+        <input v-model="form.equipamento" type="text" placeholder="Ex: Bomba Hidráulica 02"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Prioridade</label>
+        <div class="grid grid-cols-4 gap-2">
+          <button v-for="p in prioridades" :key="p.value" @click="form.prioridade = p.value"
+            class="btn-tap py-2 rounded-lg text-xs sm:text-sm font-bold border-2 transition-colors"
+            :class="form.prioridade === p.value ? p.color + ' ring-2 ring-offset-1 ring-current' : 'bg-slate-50 border-slate-200 text-slate-400'">
+            {{ p.value }}
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Descrição detalhada da falha</label>
+        <textarea v-model="form.descricao" rows="4" placeholder="Descreva o que está acontecendo, ruídos, vazamentos, paradas, etc."
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+      </div>
+
+      <button @click="abrirChamado" :disabled="enviando"
+        class="btn-tap w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md">
+        <span v-if="enviando" class="spinner"></span>
+        <span>{{ enviando ? "Enviando..." : "Abrir Chamado" }}</span>
+      </button>
+    </div>
+
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-slate-700">Chamados Abertos</h3>
+        <button @click="carregarChamados" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
+      </div>
+
+      <div v-if="loadingChamados" class="flex justify-center py-8 text-slate-400">
+        <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+      </div>
+      <div v-else-if="erroChamados" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+        {{ erroChamados }}
+      </div>
+      <div v-else-if="chamados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum chamado aberto no momento. 🎉
+      </div>
+      <div v-else class="space-y-3">
+        <div v-for="c in chamados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <div class="flex items-start justify-between gap-2 mb-2">
+            <div>
+              <p class="font-semibold text-slate-800">{{ c.equipamento }}</p>
+              <p class="text-xs text-slate-400">{{ c.area }} · {{ formatarData(c.data) }}</p>
+            </div>
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap" :class="corPrioridade(c.prioridade)">
+              {{ c.prioridade }}
+            </span>
+          </div>
+          <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
+          <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
+            <span>👤 {{ c.solicitante || "—" }}</span>
+            <span class="font-semibold text-sky-600">{{ c.status }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO DASHBOARD / HISTÓRICO
+   ========================================================================== */
+const DashboardModule = {
+  setup() {
+    const loading = ref(true);
+    const erro = ref("");
+    const preventivas = ref([]);
+    const corretivas = ref([]);
+    const filtroTipo = ref("todos");
+
+    const stats = computed(() => {
+      const abertos = corretivas.value.filter(c => String(c.status).toLowerCase() === "aberto").length;
+      const criticos = corretivas.value.filter(c => c.prioridade === "Crítica" && String(c.status).toLowerCase() === "aberto").length;
+      const naoConformes = preventivas.value.reduce((acc, p) => {
+        return acc + (p.itens || []).filter(i => i.status === "NC").length;
+      }, 0);
+      return {
+        totalPreventivas: preventivas.value.length,
+        totalCorretivas: corretivas.value.length,
+        abertos,
+        criticos,
+        naoConformes,
+      };
+    });
+
+    const historico = computed(() => {
+      const p = preventivas.value.map(x => ({
+        tipo: "Preventiva",
+        titulo: `Checklist - ${x.area || ""}`,
+        subtitulo: x.responsavel || x.email || "",
+        data: x.data,
+        badge: (x.itens || []).some(i => i.status === "NC") ? "Com NC" : "OK",
+        badgeColor: (x.itens || []).some(i => i.status === "NC") ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700",
+      }));
+      const c = corretivas.value.map(x => ({
+        tipo: "Corretiva",
+        titulo: `${x.equipamento || ""} (${x.area || ""})`,
+        subtitulo: x.solicitante || x.email || "",
+        data: x.data,
+        badge: x.status || x.prioridade,
+        badgeColor: String(x.status).toLowerCase() === "aberto" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600",
+      }));
+      let all = [...p, ...c];
+      if (filtroTipo.value !== "todos") {
+        all = all.filter(item => item.tipo.toLowerCase() === filtroTipo.value);
+      }
+      return all.sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 50);
+    });
+
+    async function carregar() {
+      loading.value = true;
+      erro.value = "";
+      try {
+        const data = await apiGet({ action: "getInitialData" });
+        preventivas.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
+        corretivas.value = (data.chamados || data.Chamados || (data.data && data.data.chamados) || []).map(c => ({
+          area: c.Area || c.area || "",
+          equipamento: c.Equipamento || c.equipamento || "",
+          prioridade: c.Prioridade || c.prioridade || "Média",
+          status: c.Status || c.status || "Aberto",
+          data: c.Data || c.data || c.DataAbertura || "",
+          solicitante: c.Solicitante || c.solicitante || "",
+        }));
+      } catch (err) {
+        console.error(err);
+        erro.value = "Não foi possível carregar o histórico.";
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    function formatarData(iso) {
+      if (!iso) return "-";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    onMounted(carregar);
+
+    return { loading, erro, stats, historico, filtroTipo, carregar, formatarData };
+  },
+  template: `
+  <div class="space-y-5">
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+      {{ erro }}
+    </div>
+
+    <template v-else>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Chamados Abertos</p>
+          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ stats.abertos }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Críticos</p>
+          <p class="text-3xl font-extrabold text-red-600 mt-1">{{ stats.criticos }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Não Conformes</p>
+          <p class="text-3xl font-extrabold text-amber-600 mt-1">{{ stats.naoConformes }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Checklists Feitos</p>
+          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ stats.totalPreventivas }}</p>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-slate-700">Histórico de Atividades</h3>
+        <button @click="carregar" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
+      </div>
+
+      <div class="flex gap-2">
+        <button v-for="f in [{v:'todos', l:'Todos'}, {v:'preventiva', l:'Preventiva'}, {v:'corretiva', l:'Corretiva'}]" :key="f.v"
+          @click="filtroTipo = f.v"
+          class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+          :class="filtroTipo === f.v ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+          {{ f.l }}
+        </button>
+      </div>
+
+      <div v-if="historico.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum registro encontrado.
+      </div>
+      <div v-else class="space-y-2">
+        <div v-for="(h, idx) in historico" :key="idx" class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                :class="h.tipo === 'Preventiva' ? 'bg-sky-100 text-sky-700' : 'bg-orange-100 text-orange-700'">
+                {{ h.tipo }}
+              </span>
+              <p class="font-semibold text-slate-800 truncate">{{ h.titulo }}</p>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5">{{ h.subtitulo }} · {{ formatarData(h.data) }}</p>
+          </div>
+          <span class="text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap" :class="h.badgeColor">{{ h.badge }}</span>
+        </div>
+      </div>
+    </template>
+  </div>`
+};
+
+/* ==========================================================================
+   APP PRINCIPAL (shell + navegação)
+   ========================================================================== */
+const App = {
+  components: { ToastHost, LoginScreen, PreventivaModule, CorretivaModule, DashboardModule },
+  setup() {
+    const user = ref(null);
+    const currentView = ref("preventiva");
+
+    onMounted(() => {
+      try {
+        const stored = localStorage.getItem(STORAGE_USER_KEY);
+        if (stored) user.value = JSON.parse(stored);
+      } catch (e) {
+        localStorage.removeItem(STORAGE_USER_KEY);
+      }
+    });
+
+    function handleLoginSuccess(u) {
+      user.value = u;
+      currentView.value = "preventiva";
+    }
+
+    function logout() {
+      localStorage.removeItem(STORAGE_USER_KEY);
+      user.value = null;
+      pushToast("Sessão encerrada.", "info");
+    }
+
+    const menu = [
+      { key: "preventiva", label: "Preventiva", icon: "✅" },
+      { key: "corretiva", label: "Corretiva", icon: "🛠️" },
+      { key: "dashboard", label: "Histórico", icon: "📊" },
+    ];
+
+    return { user, currentView, handleLoginSuccess, logout, menu };
+  },
+  template: `
+  <div>
+    <toast-host></toast-host>
+
+    <login-screen v-if="!user" @login-success="handleLoginSuccess"></login-screen>
+
+    <div v-else class="min-h-screen flex flex-col">
+      <header class="bg-slate-900 text-white sticky top-0 z-40 shadow-md">
+        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-9 h-9 rounded-lg bg-sky-500 flex items-center justify-center shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11 21h2m-2-3h2M4 21V9a1 1 0 011-1h3V4a1 1 0 011-1h6a1 1 0 011 1v4h3a1 1 0 011 1v12M9 8h6M9 12h6M9 16h2"/>
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <p class="font-bold leading-tight truncate">Hidrogeron</p>
+              <p class="text-xs text-slate-400 leading-tight truncate">{{ user.nome }}</p>
+            </div>
+          </div>
+          <button @click="logout" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0">
+            <span>Sair</span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-5 pb-24">
+        <transition name="fade" mode="out-in">
+          <preventiva-module v-if="currentView === 'preventiva'" :user="user" key="prev"></preventiva-module>
+          <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
+          <dashboard-module v-else key="dash"></dashboard-module>
+        </transition>
+      </main>
+
+      <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(0,0,0,0.05)] z-40">
+        <div class="max-w-3xl mx-auto grid grid-cols-3">
+          <button v-for="m in menu" :key="m.key" @click="currentView = m.key"
+            class="btn-tap flex flex-col items-center justify-center gap-0.5 py-2.5 text-xs font-semibold transition-colors"
+            :class="currentView === m.key ? 'text-sky-600' : 'text-slate-400'">
+            <span class="text-lg leading-none">{{ m.icon }}</span>
+            <span>{{ m.label }}</span>
+          </button>
+        </div>
+      </nav>
+    </div>
+  </div>`
+};
+
+createApp(App).mount("#app");
+</script>
+</body>
+</html>
