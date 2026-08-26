@@ -759,13 +759,240 @@ const DashboardModule = {
 };
 
 /* ==========================================================================
+   HUB PRINCIPAL (tela inicial pós-login)
+   ========================================================================== */
+const HomeHub = {
+  props: { user: Object },
+  emits: ["navigate"],
+  setup(props) {
+    const abertosCount = ref(null); // null enquanto carrega
+
+    async function carregarContagemAbertos() {
+      try {
+        const data = await getInitialData();
+        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
+        abertosCount.value = lista.filter(c => {
+          const st = String(c.Status || c.status || "Aberto").toLowerCase();
+          return st !== "concluído" && st !== "concluido";
+        }).length;
+      } catch (err) {
+        console.error(err);
+        abertosCount.value = null;
+      }
+    }
+
+    onMounted(carregarContagemAbertos);
+
+    const cards = [
+      {
+        key: "preventiva",
+        title: "Manutenção Preventiva",
+        desc: "Execução de checklists periódicos por setor",
+        icon: "✅",
+        accent: "bg-sky-500",
+      },
+      {
+        key: "corretiva",
+        title: "Manutenção Corretiva",
+        desc: "Abertura e acompanhamento de ordens de serviço",
+        icon: "🛠️",
+        accent: "bg-orange-500",
+      },
+      {
+        key: "indicadores",
+        title: "Indicadores (KPIs)",
+        desc: "Métricas de conformidade, MTBF/MTTR e histórico de intervenções",
+        icon: "📈",
+        accent: "bg-violet-500",
+      },
+      {
+        key: "dashboard",
+        title: "Dashboard Geral",
+        desc: "Visão consolidada em tempo real da infraestrutura fabril",
+        icon: "📊",
+        accent: "bg-emerald-500",
+      },
+    ];
+
+    return { cards, abertosCount, primeiroNome: (props.user.nome || "").split(" ")[0] };
+  },
+  template: `
+  <div>
+    <div class="mb-6">
+      <h1 class="text-xl sm:text-2xl font-extrabold text-slate-800">Olá, {{ primeiroNome }} 👋</h1>
+      <p class="text-slate-500 text-sm mt-1">Selecione um módulo para começar.</p>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <button v-for="c in cards" :key="c.key" @click="$emit('navigate', c.key)"
+        class="group relative text-left bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg hover:-translate-y-0.5 hover:border-slate-300 transition-all duration-200 btn-tap">
+        <div class="flex items-start justify-between mb-4">
+          <div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl text-white shadow-sm" :class="c.accent">
+            {{ c.icon }}
+          </div>
+          <span v-if="c.key === 'corretiva' && abertosCount"
+            class="text-xs font-bold bg-red-100 text-red-700 px-2.5 py-1 rounded-full">
+            {{ abertosCount }} em aberto
+          </span>
+          <span v-else-if="c.key === 'corretiva' && abertosCount === 0"
+            class="text-xs font-bold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full">
+            Tudo em dia
+          </span>
+        </div>
+        <h3 class="font-bold text-slate-800 text-base mb-1">{{ c.title }}</h3>
+        <p class="text-sm text-slate-500 leading-snug mb-4">{{ c.desc }}</p>
+        <span class="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:gap-2 transition-all">
+          Abrir <span aria-hidden="true">→</span>
+        </span>
+      </button>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO INDICADORES (KPIs)
+   ========================================================================== */
+const IndicadoresModule = {
+  setup() {
+    const loading = ref(true);
+    const erro = ref("");
+    const preventivas = ref([]);
+    const corretivas = ref([]);
+
+    function parseData(v) {
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    async function carregar() {
+      loading.value = true;
+      erro.value = "";
+      try {
+        const data = await getInitialData();
+        preventivas.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
+        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
+        corretivas.value = lista.map(c => ({
+          area: c.Area || c.area || "",
+          equipamento: c.Equipamento || c.equipamento || "",
+          status: c.Status || c.status || "Aberto",
+          data: c.Data || c.data || c.DataAbertura || "",
+          dataConclusao: c.DataConclusao || c.dataConclusao || c.DataFechamento || c.dataFechamento || c.DataResolucao || c.dataResolucao || "",
+        }));
+      } catch (err) {
+        console.error(err);
+        erro.value = "Não foi possível carregar os indicadores.";
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    const conformidade = computed(() => {
+      let c = 0, nc = 0;
+      preventivas.value.forEach(p => {
+        (p.itens || []).forEach(i => {
+          if (i.status === "C") c++;
+          else if (i.status === "NC") nc++;
+        });
+      });
+      const total = c + nc;
+      return total === 0 ? null : Math.round((c / total) * 100);
+    });
+
+    const mtbf = computed(() => {
+      const datas = corretivas.value.map(c => parseData(c.data)).filter(Boolean).sort((a, b) => a - b);
+      if (datas.length < 2) return null;
+      let totalMs = 0;
+      for (let i = 1; i < datas.length; i++) totalMs += (datas[i] - datas[i - 1]);
+      return totalMs / (datas.length - 1) / 36e5; // horas
+    });
+
+    const mttr = computed(() => {
+      const pares = corretivas.value
+        .map(c => ({ abertura: parseData(c.data), conclusao: parseData(c.dataConclusao) }))
+        .filter(p => p.abertura && p.conclusao && p.conclusao >= p.abertura);
+      if (pares.length === 0) return null;
+      const totalMs = pares.reduce((acc, p) => acc + (p.conclusao - p.abertura), 0);
+      return totalMs / pares.length / 36e5; // horas
+    });
+
+    const historico = computed(() => {
+      const p = preventivas.value.map(x => ({ tipo: "Preventiva", titulo: `Checklist - ${x.area || ""}`, data: x.data }));
+      const c = corretivas.value.map(x => ({ tipo: "Corretiva", titulo: `${x.equipamento || ""} (${x.area || ""})`, data: x.data }));
+      return [...p, ...c].sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 8);
+    });
+
+    function formatarHoras(h) {
+      if (h === null) return "—";
+      return h < 24 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d";
+    }
+
+    function formatarData(iso) {
+      if (!iso) return "-";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    onMounted(carregar);
+
+    return { loading, erro, conformidade, mtbf, mttr, historico, formatarHoras, formatarData, carregar };
+  },
+  template: `
+  <div class="space-y-5">
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+    <template v-else>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Conformidade</p>
+          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ conformidade === null ? "—" : conformidade + "%" }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Itens conformes / avaliados</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">MTBF</p>
+          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarHoras(mtbf) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Tempo médio entre falhas</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">MTTR</p>
+          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ formatarHoras(mttr) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Tempo médio de reparo</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-bold text-slate-700">Histórico de Intervenções</h3>
+          <button @click="carregar" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
+        </div>
+        <div v-if="historico.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum registro encontrado.
+        </div>
+        <div v-else class="space-y-2">
+          <div v-for="(h, idx) in historico" :key="idx" class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded mr-2"
+                :class="h.tipo === 'Preventiva' ? 'bg-sky-100 text-sky-700' : 'bg-orange-100 text-orange-700'">{{ h.tipo }}</span>
+              <span class="font-semibold text-slate-800">{{ h.titulo }}</span>
+            </div>
+            <span class="text-xs text-slate-400 whitespace-nowrap">{{ formatarData(h.data) }}</span>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>`
+};
+
+/* ==========================================================================
    APP PRINCIPAL (shell + navegação)
    ========================================================================== */
 const App = {
-  components: { ToastHost, LoginScreen, PreventivaModule, CorretivaModule, DashboardModule },
+  components: { ToastHost, LoginScreen, HomeHub, PreventivaModule, CorretivaModule, IndicadoresModule, DashboardModule },
   setup() {
     const user = ref(null);
-    const currentView = ref("preventiva");
+    const currentView = ref("home");
 
     onMounted(() => {
       try {
@@ -778,22 +1005,42 @@ const App = {
 
     function handleLoginSuccess(u) {
       user.value = u;
-      currentView.value = "preventiva";
+      currentView.value = "home";
     }
 
     function logout() {
       localStorage.removeItem(STORAGE_USER_KEY);
       user.value = null;
+      currentView.value = "home";
       pushToast("Sessão encerrada.", "info");
     }
 
-    const menu = [
-      { key: "preventiva", label: "Preventiva", icon: "✅" },
-      { key: "corretiva", label: "Corretiva", icon: "🛠️" },
-      { key: "dashboard", label: "Histórico", icon: "📊" },
-    ];
+    function irParaHome() {
+      currentView.value = "home";
+    }
 
-    return { user, currentView, handleLoginSuccess, logout, menu };
+    function navigate(view) {
+      currentView.value = view;
+    }
+
+    const titulosModulo = {
+      preventiva: "Manutenção Preventiva",
+      corretiva: "Manutenção Corretiva",
+      indicadores: "Indicadores (KPIs)",
+      dashboard: "Dashboard Geral",
+    };
+    const currentTitle = computed(() => titulosModulo[currentView.value] || "");
+
+    const cargoBadgeClass = computed(() => {
+      const c = ((user.value && user.value.cargo) || "").toLowerCase();
+      if (c.includes("admin")) return "bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-400/40";
+      if (c.includes("manuten")) return "bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/40";
+      return "bg-slate-500/20 text-slate-300 ring-1 ring-slate-400/40";
+    });
+
+    return {
+      user, currentView, handleLoginSuccess, logout, irParaHome, navigate, currentTitle, cargoBadgeClass,
+    };
   },
   template: `
   <div>
@@ -801,47 +1048,62 @@ const App = {
 
     <login-screen v-if="!user" @login-success="handleLoginSuccess"></login-screen>
 
-    <div v-else class="min-h-screen flex flex-col">
-      <header class="bg-slate-900 text-white sticky top-0 z-40 shadow-md">
-        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div class="flex items-center gap-2.5 min-w-0">
-            <div class="w-9 h-9 rounded-lg bg-sky-500 flex items-center justify-center shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M11 21h2m-2-3h2M4 21V9a1 1 0 011-1h3V4a1 1 0 011-1h6a1 1 0 011 1v4h3a1 1 0 011 1v12M9 8h6M9 12h6M9 16h2"/>
-              </svg>
-            </div>
-            <div class="min-w-0">
-              <p class="font-bold leading-tight truncate">Hidrogeron</p>
-              <p class="text-xs text-slate-400 leading-tight truncate">{{ user.nome }}</p>
+    <div v-else class="min-h-screen flex flex-col bg-slate-100">
+      <div class="sticky top-0 z-40">
+        <header class="bg-slate-900 text-white shadow-md">
+          <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+            <button @click="irParaHome" class="btn-tap flex items-center gap-2.5 min-w-0 text-left">
+              <div class="w-9 h-9 rounded-lg bg-sky-500 flex items-center justify-center shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 21h2m-2-3h2M4 21V9a1 1 0 011-1h3V4a1 1 0 011-1h6a1 1 0 011 1v4h3a1 1 0 011 1v12M9 8h6M9 12h6M9 16h2"/>
+                </svg>
+              </div>
+              <div class="min-w-0">
+                <p class="font-bold leading-tight truncate">Hidrogeron</p>
+                <p class="text-[11px] text-slate-400 leading-tight truncate">Sistema de Manutenção</p>
+              </div>
+            </button>
+
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="text-right min-w-0">
+                <p class="text-sm font-semibold truncate max-w-[110px] sm:max-w-none ml-auto">{{ user.nome }}</p>
+                <span class="inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full mt-0.5" :class="cargoBadgeClass">
+                  {{ user.cargo || "Colaborador" }}
+                </span>
+              </div>
+              <button @click="logout" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0">
+                <span class="hidden sm:inline">Sair</span>
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                </svg>
+              </button>
             </div>
           </div>
-          <button @click="logout" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0">
-            <span>Sair</span>
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-            </svg>
-          </button>
-        </div>
-      </header>
+        </header>
 
-      <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-5 pb-24">
+        <div v-if="currentView !== 'home'" class="bg-white border-b border-slate-200">
+          <div class="max-w-6xl mx-auto px-4 py-2.5 flex items-center gap-3">
+            <button @click="irParaHome" class="btn-tap flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-sky-600 shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+              </svg>
+              <span>Voltar ao Início</span>
+            </button>
+            <span class="text-slate-300">|</span>
+            <h2 class="text-sm font-bold text-slate-800 truncate">{{ currentTitle }}</h2>
+          </div>
+        </div>
+      </div>
+
+      <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
         <transition name="fade" mode="out-in">
-          <preventiva-module v-if="currentView === 'preventiva'" :user="user" key="prev"></preventiva-module>
+          <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" key="home"></home-hub>
+          <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
+          <indicadores-module v-else-if="currentView === 'indicadores'" key="ind"></indicadores-module>
           <dashboard-module v-else key="dash"></dashboard-module>
         </transition>
       </main>
-
-      <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(0,0,0,0.05)] z-40">
-        <div class="max-w-3xl mx-auto grid grid-cols-3">
-          <button v-for="m in menu" :key="m.key" @click="currentView = m.key"
-            class="btn-tap flex flex-col items-center justify-center gap-0.5 py-2.5 text-xs font-semibold transition-colors"
-            :class="currentView === m.key ? 'text-sky-600' : 'text-slate-400'">
-            <span class="text-lg leading-none">{{ m.icon }}</span>
-            <span>{{ m.label }}</span>
-          </button>
-        </div>
-      </nav>
     </div>
   </div>`
 };
