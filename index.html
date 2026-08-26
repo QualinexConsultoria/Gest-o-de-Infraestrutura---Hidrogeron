@@ -94,20 +94,27 @@ async function getInitialData() {
   return data;
 }
 
-async function apiPost(payload) {
-  let res;
+// Envia dados ao Apps Script em mode: "no-cors" para eliminar 100% do risco
+// de bloqueio de CORS/preflight. Trade-off: a resposta fica "opaque" — o
+// navegador não permite ler status nem corpo dela, então NÃO é possível saber
+// se o Apps Script processou o payload com sucesso a partir deste retorno.
+// Por isso os fluxos que chamam esta função tratam a UI de forma otimista
+// (assumem sucesso ao enviar) e resincronizam os dados reais depois, em
+// segundo plano, via um novo getInitialData().
+async function postToAppsScript(payload) {
   try {
-    res = await fetch(API_URL, {
+    await fetch(API_URL, {
       method: "POST",
+      mode: "no-cors",
       redirect: "follow",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload),
     });
+    return { status: "success" };
   } catch (networkErr) {
-    console.error("Erro de rede/CORS no POST:", networkErr);
-    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+    console.error("Erro de rede ao enviar dados:", networkErr);
+    throw networkErr;
   }
-  return handleApiResponse(res);
 }
 
 function uid() {
@@ -342,10 +349,12 @@ const PreventivaModule = {
     const inputCameraRef = ref(null);
     const inputGaleriaRef = ref(null);
 
-    async function carregarEquipamentos() {
-      loadingEquip.value = true;
-      erroCarregamento.value = "";
-      equipamentos.value = [];
+    async function carregarEquipamentos(opts) {
+      const silencioso = opts && opts.silencioso;
+      if (!silencioso) {
+        loadingEquip.value = true;
+        erroCarregamento.value = "";
+      }
       try {
         const data = await getInitialData();
         const todos = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
@@ -364,9 +373,9 @@ const PreventivaModule = {
         preventivasHistorico.value = extractPreventivas(data);
       } catch (err) {
         console.error(err);
-        erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
+        if (!silencioso) erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
       } finally {
-        loadingEquip.value = false;
+        if (!silencioso) loadingEquip.value = false;
       }
     }
 
@@ -499,11 +508,12 @@ const PreventivaModule = {
           fotoNome: temNC.value ? fotoNome.value : "",
           observacoes: observacoesGerais.value.trim(),
         };
-        const resp = await apiPost(payload);
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        await postToAppsScript(payload);
         pushToast("Inspeção registrada com sucesso!", "success");
         voltarLista();
-        await carregarEquipamentos();
+        // Resposta é opaca (mode: "no-cors"); resincroniza em segundo plano
+        // após um pequeno intervalo para dar tempo do Apps Script processar.
+        setTimeout(() => carregarEquipamentos({ silencioso: true }), 2000);
       } catch (err) {
         console.error(err);
         pushToast("Erro ao salvar inspeção. Tente novamente.", "error");
@@ -698,13 +708,15 @@ const CorretivaModule = {
     const resolucaoTexto = ref("");
     const fotoConclusaoBase64 = ref(null);
     const fotoConclusaoNome = ref("");
-    const encerrando = ref(false);
     const inputCameraConclusaoRef = ref(null);
     const inputGaleriaConclusaoRef = ref(null);
 
-    async function carregarChamados() {
-      loadingChamados.value = true;
-      erroChamados.value = "";
+    async function carregarChamados(opts) {
+      const silencioso = opts && opts.silencioso;
+      if (!silencioso) {
+        loadingChamados.value = true;
+        erroChamados.value = "";
+      }
       try {
         const data = await getInitialData();
         const todos = extractCorretivas(data);
@@ -716,9 +728,9 @@ const CorretivaModule = {
           .sort((a, b) => new Date(b.dataConclusao || b.data) - new Date(a.dataConclusao || a.data));
       } catch (err) {
         console.error(err);
-        erroChamados.value = "Não foi possível carregar os chamados abertos.";
+        if (!silencioso) erroChamados.value = "Não foi possível carregar os chamados abertos.";
       } finally {
-        loadingChamados.value = false;
+        if (!silencioso) loadingChamados.value = false;
       }
     }
 
@@ -743,8 +755,7 @@ const CorretivaModule = {
           solicitante: props.user.nome || "Produção",
           dataAbertura,
         };
-        const resp = await apiPost(payload);
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        await postToAppsScript(payload);
 
         form.equipamento = "";
         form.descricao = "";
@@ -752,7 +763,7 @@ const CorretivaModule = {
 
         // Feedback visual instantâneo: insere o chamado localmente antes de resincronizar com a planilha.
         chamados.value.unshift({
-          id: (resp && (resp.id || resp.ID)) || uid(),
+          id: uid(),
           area: payload.area,
           equipamento: payload.equipamento,
           descricao: payload.descricaoProblema,
@@ -763,7 +774,9 @@ const CorretivaModule = {
         });
 
         pushToast("Chamado aberto com sucesso!", "success");
-        await carregarChamados();
+        // Resposta é opaca (mode: "no-cors"); resincroniza em segundo plano
+        // após um pequeno intervalo para dar tempo do Apps Script processar.
+        setTimeout(() => carregarChamados({ silencioso: true }), 2000);
       } catch (err) {
         console.error(err);
         pushToast("Erro ao abrir chamado. Tente novamente.", "error");
@@ -781,7 +794,6 @@ const CorretivaModule = {
     }
 
     function fecharModal() {
-      if (encerrando.value) return;
       modalAberto.value = false;
       chamadoSelecionado.value = null;
     }
@@ -803,47 +815,56 @@ const CorretivaModule = {
       fotoConclusaoNome.value = "";
     }
 
-    async function confirmarEncerramento() {
+    function confirmarEncerramento() {
       if (!resolucaoTexto.value.trim()) {
         pushToast("Descreva as ações realizadas para encerrar o chamado.", "error");
         return;
       }
       const chamado = chamadoSelecionado.value;
-      encerrando.value = true;
-      try {
-        const dataFechamento = new Date().toISOString().replace("T", " ").substring(0, 16);
-        const payload = {
-          action: "closeCorretiva",
+      const dataFechamento = new Date().toISOString().replace("T", " ").substring(0, 16);
+      const foto = fotoConclusaoBase64.value;
+      const fotoNomeAnexo = fotoConclusaoNome.value;
+
+      // Payload principal enxuto (só texto) — prioridade e velocidade máximas.
+      const payload = {
+        action: "closeCorretiva",
+        idChamado: chamado.id,
+        tecnico: props.user.nome || "Produção",
+        resolucao: resolucaoTexto.value.trim(),
+        dataFechamento,
+      };
+
+      // Envio best-effort: sob mode "no-cors" não há confirmação de sucesso/erro
+      // do servidor, então a UI é atualizada de forma otimista (abaixo) sem
+      // esperar a resposta.
+      postToAppsScript(payload).catch(err => console.error("Erro ao encerrar chamado:", err));
+
+      // A evidência fotográfica (pesada) é enviada à parte, também best-effort,
+      // para nunca atrasar ou arriscar o fechamento do chamado em si.
+      if (foto) {
+        postToAppsScript({
+          action: "attachCorretivaEvidencia",
           idChamado: chamado.id,
-          tecnico: props.user.nome || "Produção",
-          resolucao: resolucaoTexto.value.trim(),
-          dataFechamento,
-          fotoConclusaoBase64: fotoConclusaoBase64.value || null,
-          fotoConclusaoNome: fotoConclusaoNome.value || "",
-        };
-        const resp = await apiPost(payload);
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao encerrar.");
-
-        // Move o chamado de "abertos" para "encerrados" localmente para feedback instantâneo.
-        chamados.value = chamados.value.filter(c => c.id !== chamado.id);
-        chamadosEncerrados.value.unshift({
-          ...chamado,
-          status: "Concluído",
-          resolucao: payload.resolucao,
-          tecnico: payload.tecnico,
-          dataConclusao: dataFechamento,
-        });
-
-        pushToast(`Chamado #${chamado.id} encerrado com sucesso!`, "success");
-        modalAberto.value = false;
-        chamadoSelecionado.value = null;
-        await carregarChamados();
-      } catch (err) {
-        console.error(err);
-        pushToast("Erro ao encerrar o chamado. Tente novamente.", "error");
-      } finally {
-        encerrando.value = false;
+          fotoBase64: foto,
+          fotoNome: fotoNomeAnexo,
+        }).catch(err => console.error("Erro ao enviar evidência fotográfica:", err));
       }
+
+      // Feedback imediato: fecha o modal e move o chamado para "Encerrados" já.
+      modalAberto.value = false;
+      chamadoSelecionado.value = null;
+      chamados.value = chamados.value.filter(c => c.id !== chamado.id);
+      chamadosEncerrados.value.unshift({
+        ...chamado,
+        status: "Concluído",
+        resolucao: payload.resolucao,
+        tecnico: payload.tecnico,
+        dataConclusao: dataFechamento,
+      });
+      pushToast(`Chamado #${chamado.id} encerrado com sucesso!`, "success");
+
+      // Sincronização silenciosa (sem loading/erro visíveis) após 2s.
+      setTimeout(() => carregarChamados({ silencioso: true }), 2000);
     }
 
     function corPrioridade(p) {
@@ -863,7 +884,7 @@ const CorretivaModule = {
     return {
       areas, prioridades, form, enviando, abrirChamado,
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
-      modalAberto, chamadoSelecionado, resolucaoTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
+      modalAberto, chamadoSelecionado, resolucaoTexto, fotoConclusaoBase64, fotoConclusaoNome,
       inputCameraConclusaoRef, inputGaleriaConclusaoRef,
       abrirModalEncerramento, fecharModal, onFotoConclusaoSelecionada, removerFotoConclusao, confirmarEncerramento,
     };
@@ -1045,14 +1066,13 @@ const CorretivaModule = {
           </div>
 
           <div class="flex gap-2 pt-1">
-            <button @click="fecharModal" :disabled="encerrando"
-              class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-3 rounded-xl">
+            <button @click="fecharModal"
+              class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 rounded-xl">
               Cancelar
             </button>
-            <button @click="confirmarEncerramento" :disabled="encerrando || !resolucaoTexto.trim()"
+            <button @click="confirmarEncerramento" :disabled="!resolucaoTexto.trim()"
               class="btn-tap flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl shadow-md">
-              <span v-if="encerrando" class="spinner"></span>
-              <span>{{ encerrando ? "Encerrando..." : "Concluir e Fechar Chamado" }}</span>
+              Concluir e Fechar Chamado
             </button>
           </div>
         </div>
