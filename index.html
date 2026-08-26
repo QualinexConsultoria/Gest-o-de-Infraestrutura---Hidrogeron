@@ -65,11 +65,14 @@ async function handleApiResponse(res) {
 }
 
 // Wrapper genérico para qualquer ação via GET.
+// _t=Date.now() + cache: "no-store" quebram o cache do navegador: sem isso,
+// requisições idênticas (mesma URL/querystring) podem voltar com uma resposta
+// antiga em cache, escondendo uma escrita que já foi salva na planilha.
 async function apiGet(params) {
-  const qs = new URLSearchParams(params).toString();
+  const qs = new URLSearchParams({ ...params, _t: Date.now() }).toString();
   let res;
   try {
-    res = await fetch(`${API_URL}?${qs}`, { method: "GET", redirect: "follow" });
+    res = await fetch(`${API_URL}?${qs}`, { method: "GET", redirect: "follow", cache: "no-store" });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no GET:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
@@ -81,9 +84,10 @@ async function apiGet(params) {
 async function getInitialData() {
   let res;
   try {
-    res = await fetch(`${API_URL}?action=getInitialData`, {
+    res = await fetch(`${API_URL}?action=getInitialData&_t=${Date.now()}`, {
       method: "GET",
       redirect: "follow",
+      cache: "no-store",
     });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no getInitialData:", networkErr);
@@ -122,10 +126,10 @@ async function postToAppsScript(payload) {
 // o navegador consegue ler de verdade — diferente do POST em mode: "no-cors",
 // aqui dá para confirmar sucesso/erro reportado pelo próprio Apps Script.
 async function saveCorretivaApi(payload) {
-  const params = new URLSearchParams({ action: "saveCorretiva", ...payload });
+  const params = new URLSearchParams({ action: "saveCorretiva", ...payload, _t: Date.now() });
   let res;
   try {
-    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow" });
+    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no saveCorretiva:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
@@ -140,10 +144,11 @@ async function closeCorretivaApi(idChamado, resolucao, tecnico) {
     resolucao: resolucao,
     tecnico: tecnico,
     dataFechamento: new Date().toISOString().replace("T", " ").substring(0, 16),
+    _t: Date.now(),
   });
   let res;
   try {
-    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow" });
+    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no closeCorretiva:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
@@ -874,19 +879,26 @@ const CorretivaModule = {
           }).catch(err => console.error("Erro ao enviar evidência fotográfica:", err));
         }
 
-        // Retorno confirmado pelo servidor: atualiza a UI local e fecha o modal.
+        // Retorno confirmado pelo servidor: atualiza o objeto do chamado em
+        // memória (estado otimista) e re-renderiza a tela na hora.
+        const dataFechamento = (resp && (resp.dataFechamento || resp.dataConclusao))
+          || new Date().toISOString().replace("T", " ").substring(0, 16);
+        chamado.status = "Fechado";
+        chamado.dataConclusao = dataFechamento;
+        chamado.resolucao = resolucao;
+        chamado.tecnico = tecnico + (resolucao ? " - Obs: " + resolucao : "");
+
         chamados.value = chamados.value.filter(c => c.id !== chamado.id);
-        chamadosEncerrados.value.unshift({
-          ...chamado,
-          status: "Concluído",
-          resolucao,
-          tecnico,
-          dataConclusao: (resp && (resp.dataFechamento || resp.dataConclusao))
-            || new Date().toISOString().replace("T", " ").substring(0, 16),
-        });
+        chamadosEncerrados.value.unshift(chamado);
+
         pushToast(`Chamado #${chamado.id} encerrado com sucesso!`, "success");
         modalAberto.value = false;
         chamadoSelecionado.value = null;
+
+        // NÃO recarrega a API imediatamente: a planilha pode levar um instante
+        // para consolidar a escrita. Sincroniza em segundo plano só depois de
+        // 3s, sem loading/erro visíveis (a UI local já está correta).
+        setTimeout(() => carregarChamados({ silencioso: true }), 3000);
       } catch (err) {
         console.error(err);
         pushToast("Erro ao encerrar o chamado. Tente novamente.", "error");
