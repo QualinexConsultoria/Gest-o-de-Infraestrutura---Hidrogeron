@@ -89,7 +89,9 @@ async function getInitialData() {
     console.error("Erro de rede/CORS no getInitialData:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
   }
-  return handleApiResponse(res);
+  const data = await handleApiResponse(res);
+  console.log("Dados Carregados:", data);
+  return data;
 }
 
 async function apiPost(payload) {
@@ -114,6 +116,46 @@ function uid() {
 
 function nowISO() {
   return new Date().toISOString();
+}
+
+/* ==========================================================================
+   NORMALIZAÇÃO DOS DADOS DA PLANILHA (aceita variações de nome de coluna)
+   ========================================================================== */
+function normalizePreventivaLog(p) {
+  return {
+    id: p.ID_Log || p.id_log || p.ID || p.id || uid(),
+    data: p.Data_Hora || p.data_hora || p.Data || p.data || "",
+    area: p.Area || p.area || "",
+    equipamento: p.Equipamento || p.equipamento || "",
+    usuario: p.Usuario || p.usuario || "",
+    status: normalizeStatusInspecao(p.Status_Inspecao || p.status_inspecao || p.Status || p.status || ""),
+    observacoes: p.Observacoes || p.observacoes || p.Obs || "",
+  };
+}
+
+function normalizeCorretivaChamado(c) {
+  return {
+    id: c.ID_Chamado || c.id_chamado || c.ID || c.id || uid(),
+    data: c.Data_Abertura || c.data_abertura || c.Data || c.data || "",
+    area: c.Area || c.area || "",
+    equipamento: c.Equipamento || c.equipamento || "",
+    descricao: c.Descricao_Problema || c.descricao_problema || c.Descricao || "",
+    prioridade: c.Prioridade || c.prioridade || "Média",
+    solicitante: c.Solicitante || c.solicitante || "",
+    status: c.Status_Chamado || c.status_chamado || c.Status || "Aberto",
+    // Não faz parte do schema informado, mas é aproveitada se existir (usada no cálculo de MTTR).
+    dataConclusao: c.DataConclusao || c.dataConclusao || c.DataFechamento || c.dataFechamento || c.DataResolucao || c.dataResolucao || "",
+  };
+}
+
+function extractPreventivas(data) {
+  const raw = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
+  return raw.map(normalizePreventivaLog);
+}
+
+function extractCorretivas(data) {
+  const raw = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
+  return raw.map(normalizeCorretivaChamado);
 }
 
 /* ==========================================================================
@@ -310,7 +352,7 @@ const PreventivaModule = {
           itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
             || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
-        preventivasHistorico.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
+        preventivasHistorico.value = extractPreventivas(data);
       } catch (err) {
         console.error(err);
         erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
@@ -319,22 +361,19 @@ const PreventivaModule = {
       }
     }
 
-    function ultimaInspecao(equipId) {
+    // O log de preventivas não traz o ID do equipamento, então o casamento
+    // é feito por nome do equipamento (+ área, quando disponível).
+    function ultimaInspecao(eq) {
       let melhor = null;
+      const nomeAlvo = String(eq.nome || "").trim().toLowerCase();
       preventivasHistorico.value.forEach(p => {
-        let statusBruto = null;
-        const pEquipId = p.equipamentoId || p.EquipamentoId || p.EquipamentoID || null;
-        if (pEquipId != null && String(pEquipId) === String(equipId)) {
-          statusBruto = p.statusGeral || p.StatusGeral || null;
-        } else if (Array.isArray(p.itens)) {
-          const match = p.itens.find(i => String(i.equipamentoId) === String(equipId));
-          if (match) statusBruto = match.status;
-        }
-        if (!statusBruto) return;
-        const d = new Date(p.data || p.Data || p.DataAbertura);
+        const nomeLog = String(p.equipamento || "").trim().toLowerCase();
+        if (!nomeLog || nomeLog !== nomeAlvo) return;
+        if (p.area && areaSelecionada.value && p.area.trim().toLowerCase() !== areaSelecionada.value.trim().toLowerCase()) return;
+        const d = new Date(p.data);
         if (isNaN(d.getTime())) return;
         if (!melhor || d > melhor.dataObj) {
-          melhor = { dataObj: d, status: normalizeStatusInspecao(statusBruto) };
+          melhor = { dataObj: d, status: p.status };
         }
       });
       return melhor;
@@ -347,8 +386,8 @@ const PreventivaModule = {
       return "—";
     }
 
-    function badgeUltimaInspecao(equipId) {
-      const info = ultimaInspecao(equipId);
+    function badgeUltimaInspecao(eq) {
+      const info = ultimaInspecao(eq);
       if (!info) return "bg-slate-100 text-slate-500";
       if (info.status === "C") return "bg-emerald-100 text-emerald-700";
       if (info.status === "NC") return "bg-red-100 text-red-700";
@@ -511,12 +550,12 @@ const PreventivaModule = {
               <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
             </p>
             <p class="text-xs text-slate-400 mt-0.5 truncate">
-              <template v-if="ultimaInspecao(eq.id)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq.id).status) }} · {{ formatarData(ultimaInspecao(eq.id).dataObj) }}</template>
+              <template v-if="ultimaInspecao(eq)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq).status) }} · {{ formatarData(ultimaInspecao(eq).dataObj) }}</template>
               <template v-else>Sem inspeção registrada</template>
             </p>
           </div>
-          <span class="text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0" :class="badgeUltimaInspecao(eq.id)">
-            {{ ultimaInspecao(eq.id) ? formatarStatusLabel(ultimaInspecao(eq.id).status) : 'Pendente' }}
+          <span class="text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0" :class="badgeUltimaInspecao(eq)">
+            {{ ultimaInspecao(eq) ? formatarStatusLabel(ultimaInspecao(eq).status) : 'Pendente' }}
           </span>
         </button>
       </div>
@@ -647,18 +686,7 @@ const CorretivaModule = {
       erroChamados.value = "";
       try {
         const data = await getInitialData();
-        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
-        chamados.value = lista
-          .map(c => ({
-            id: c.ID || c.Id || c.id || uid(),
-            area: c.Area || c.area || "",
-            equipamento: c.Equipamento || c.equipamento || "",
-            prioridade: c.Prioridade || c.prioridade || "Média",
-            descricao: c.Descricao || c.descricao || "",
-            status: c.Status || c.status || "Aberto",
-            data: c.Data || c.data || c.DataAbertura || "",
-            solicitante: c.Solicitante || c.solicitante || c.Responsavel || "",
-          }))
+        chamados.value = extractCorretivas(data)
           .filter(c => String(c.status).toLowerCase() !== "concluído" && String(c.status).toLowerCase() !== "concluido")
           .sort((a, b) => new Date(b.data) - new Date(a.data));
       } catch (err) {
@@ -820,9 +848,7 @@ const DashboardModule = {
     const stats = computed(() => {
       const abertos = corretivas.value.filter(c => String(c.status).toLowerCase() === "aberto").length;
       const criticos = corretivas.value.filter(c => c.prioridade === "Crítica" && String(c.status).toLowerCase() === "aberto").length;
-      const naoConformes = preventivas.value.reduce((acc, p) => {
-        return acc + (p.itens || []).filter(i => i.status === "NC").length;
-      }, 0);
+      const naoConformes = preventivas.value.filter(p => p.status === "NC").length;
       return {
         totalPreventivas: preventivas.value.length,
         totalCorretivas: corretivas.value.length,
@@ -835,16 +861,16 @@ const DashboardModule = {
     const historico = computed(() => {
       const p = preventivas.value.map(x => ({
         tipo: "Preventiva",
-        titulo: `Checklist - ${x.area || ""}`,
-        subtitulo: x.responsavel || x.email || "",
+        titulo: `${x.equipamento ? x.equipamento + " - " : ""}${x.area || ""}`,
+        subtitulo: x.usuario || "",
         data: x.data,
-        badge: (x.itens || []).some(i => i.status === "NC") ? "Com NC" : "OK",
-        badgeColor: (x.itens || []).some(i => i.status === "NC") ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700",
+        badge: x.status === "NC" ? "Não Conforme" : x.status === "NA" ? "Não Aplicável" : "Conforme",
+        badgeColor: x.status === "NC" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700",
       }));
       const c = corretivas.value.map(x => ({
         tipo: "Corretiva",
         titulo: `${x.equipamento || ""} (${x.area || ""})`,
-        subtitulo: x.solicitante || x.email || "",
+        subtitulo: x.solicitante || "",
         data: x.data,
         badge: x.status || x.prioridade,
         badgeColor: String(x.status).toLowerCase() === "aberto" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600",
@@ -861,15 +887,8 @@ const DashboardModule = {
       erro.value = "";
       try {
         const data = await getInitialData();
-        preventivas.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
-        corretivas.value = (data.chamados || data.Chamados || (data.data && data.data.chamados) || []).map(c => ({
-          area: c.Area || c.area || "",
-          equipamento: c.Equipamento || c.equipamento || "",
-          prioridade: c.Prioridade || c.prioridade || "Média",
-          status: c.Status || c.status || "Aberto",
-          data: c.Data || c.data || c.DataAbertura || "",
-          solicitante: c.Solicitante || c.solicitante || "",
-        }));
+        preventivas.value = extractPreventivas(data);
+        corretivas.value = extractCorretivas(data);
       } catch (err) {
         console.error(err);
         erro.value = "Não foi possível carregar o histórico.";
@@ -967,9 +986,8 @@ const HomeHub = {
     async function carregarContagemAbertos() {
       try {
         const data = await getInitialData();
-        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
-        abertosCount.value = lista.filter(c => {
-          const st = String(c.Status || c.status || "Aberto").toLowerCase();
+        abertosCount.value = extractCorretivas(data).filter(c => {
+          const st = String(c.status).toLowerCase();
           return st !== "concluído" && st !== "concluido";
         }).length;
       } catch (err) {
@@ -1066,15 +1084,8 @@ const IndicadoresModule = {
       erro.value = "";
       try {
         const data = await getInitialData();
-        preventivas.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
-        const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
-        corretivas.value = lista.map(c => ({
-          area: c.Area || c.area || "",
-          equipamento: c.Equipamento || c.equipamento || "",
-          status: c.Status || c.status || "Aberto",
-          data: c.Data || c.data || c.DataAbertura || "",
-          dataConclusao: c.DataConclusao || c.dataConclusao || c.DataFechamento || c.dataFechamento || c.DataResolucao || c.dataResolucao || "",
-        }));
+        preventivas.value = extractPreventivas(data);
+        corretivas.value = extractCorretivas(data);
       } catch (err) {
         console.error(err);
         erro.value = "Não foi possível carregar os indicadores.";
@@ -1084,13 +1095,8 @@ const IndicadoresModule = {
     }
 
     const conformidade = computed(() => {
-      let c = 0, nc = 0;
-      preventivas.value.forEach(p => {
-        (p.itens || []).forEach(i => {
-          if (i.status === "C") c++;
-          else if (i.status === "NC") nc++;
-        });
-      });
+      const c = preventivas.value.filter(p => p.status === "C").length;
+      const nc = preventivas.value.filter(p => p.status === "NC").length;
       const total = c + nc;
       return total === 0 ? null : Math.round((c / total) * 100);
     });
@@ -1113,7 +1119,7 @@ const IndicadoresModule = {
     });
 
     const historico = computed(() => {
-      const p = preventivas.value.map(x => ({ tipo: "Preventiva", titulo: `Checklist - ${x.area || ""}`, data: x.data }));
+      const p = preventivas.value.map(x => ({ tipo: "Preventiva", titulo: `${x.equipamento || ""} (${x.area || ""})`, data: x.data }));
       const c = corretivas.value.map(x => ({ tipo: "Corretiva", titulo: `${x.equipamento || ""} (${x.area || ""})`, data: x.data }));
       return [...p, ...c].sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 8);
     });
