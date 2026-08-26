@@ -143,8 +143,11 @@ function normalizeCorretivaChamado(c) {
     prioridade: c.Prioridade || c.prioridade || "Média",
     solicitante: c.Solicitante || c.solicitante || "",
     status: c.Status_Chamado || c.status_chamado || c.Status || "Aberto",
-    // Não faz parte do schema informado, mas é aproveitada se existir (usada no cálculo de MTTR).
+    // Não fazem parte do schema original informado, mas são aproveitados se existirem
+    // (preenchidos pelo fluxo de encerramento / usados no cálculo de MTTR).
     dataConclusao: c.DataConclusao || c.dataConclusao || c.DataFechamento || c.dataFechamento || c.DataResolucao || c.dataResolucao || "",
+    resolucao: c.Resolucao || c.resolucao || c.Resolução || c.resolução || "",
+    tecnico: c.Tecnico || c.tecnico || c.Técnico || c.técnico || "",
   };
 }
 
@@ -684,17 +687,33 @@ const CorretivaModule = {
     });
     const enviando = ref(false);
     const chamados = ref([]);
+    const chamadosEncerrados = ref([]);
     const loadingChamados = ref(true);
     const erroChamados = ref("");
+    const aba = ref("abertos"); // 'abertos' | 'encerrados'
+
+    // Modal de atendimento/encerramento
+    const modalAberto = ref(false);
+    const chamadoSelecionado = ref(null);
+    const resolucaoTexto = ref("");
+    const fotoConclusaoBase64 = ref(null);
+    const fotoConclusaoNome = ref("");
+    const encerrando = ref(false);
+    const inputCameraConclusaoRef = ref(null);
+    const inputGaleriaConclusaoRef = ref(null);
 
     async function carregarChamados() {
       loadingChamados.value = true;
       erroChamados.value = "";
       try {
         const data = await getInitialData();
-        chamados.value = extractCorretivas(data)
+        const todos = extractCorretivas(data);
+        chamados.value = todos
           .filter(c => isStatusChamadoAberto(c.status))
           .sort((a, b) => new Date(b.data) - new Date(a.data));
+        chamadosEncerrados.value = todos
+          .filter(c => !isStatusChamadoAberto(c.status))
+          .sort((a, b) => new Date(b.dataConclusao || b.data) - new Date(a.dataConclusao || a.data));
       } catch (err) {
         console.error(err);
         erroChamados.value = "Não foi possível carregar os chamados abertos.";
@@ -753,6 +772,80 @@ const CorretivaModule = {
       }
     }
 
+    function abrirModalEncerramento(chamado) {
+      chamadoSelecionado.value = chamado;
+      resolucaoTexto.value = "";
+      fotoConclusaoBase64.value = null;
+      fotoConclusaoNome.value = "";
+      modalAberto.value = true;
+    }
+
+    function fecharModal() {
+      if (encerrando.value) return;
+      modalAberto.value = false;
+      chamadoSelecionado.value = null;
+    }
+
+    function onFotoConclusaoSelecionada(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        fotoConclusaoBase64.value = reader.result;
+        fotoConclusaoNome.value = file.name;
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    }
+
+    function removerFotoConclusao() {
+      fotoConclusaoBase64.value = null;
+      fotoConclusaoNome.value = "";
+    }
+
+    async function confirmarEncerramento() {
+      if (!resolucaoTexto.value.trim()) {
+        pushToast("Descreva as ações realizadas para encerrar o chamado.", "error");
+        return;
+      }
+      const chamado = chamadoSelecionado.value;
+      encerrando.value = true;
+      try {
+        const dataFechamento = new Date().toISOString().replace("T", " ").substring(0, 16);
+        const payload = {
+          action: "closeCorretiva",
+          idChamado: chamado.id,
+          tecnico: props.user.nome || "Produção",
+          resolucao: resolucaoTexto.value.trim(),
+          dataFechamento,
+          fotoConclusaoBase64: fotoConclusaoBase64.value || null,
+          fotoConclusaoNome: fotoConclusaoNome.value || "",
+        };
+        const resp = await apiPost(payload);
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao encerrar.");
+
+        // Move o chamado de "abertos" para "encerrados" localmente para feedback instantâneo.
+        chamados.value = chamados.value.filter(c => c.id !== chamado.id);
+        chamadosEncerrados.value.unshift({
+          ...chamado,
+          status: "Concluído",
+          resolucao: payload.resolucao,
+          tecnico: payload.tecnico,
+          dataConclusao: dataFechamento,
+        });
+
+        pushToast(`Chamado #${chamado.id} encerrado com sucesso!`, "success");
+        modalAberto.value = false;
+        chamadoSelecionado.value = null;
+        await carregarChamados();
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao encerrar o chamado. Tente novamente.", "error");
+      } finally {
+        encerrando.value = false;
+      }
+    }
+
     function corPrioridade(p) {
       const found = prioridades.find(x => x.value === p);
       return found ? found.color : "bg-slate-100 text-slate-700 border-slate-300";
@@ -769,7 +862,10 @@ const CorretivaModule = {
 
     return {
       areas, prioridades, form, enviando, abrirChamado,
-      chamados, loadingChamados, erroChamados, corPrioridade, formatarData, carregarChamados,
+      chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
+      modalAberto, chamadoSelecionado, resolucaoTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
+      inputCameraConclusaoRef, inputGaleriaConclusaoRef,
+      abrirModalEncerramento, fecharModal, onFotoConclusaoSelecionada, removerFotoConclusao, confirmarEncerramento,
     };
   },
   template: `
@@ -818,7 +914,16 @@ const CorretivaModule = {
 
     <div>
       <div class="flex items-center justify-between mb-3">
-        <h3 class="font-bold text-slate-700">Chamados Abertos</h3>
+        <div class="flex gap-2">
+          <button @click="aba = 'abertos'" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+            :class="aba === 'abertos' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            Chamados Abertos
+          </button>
+          <button @click="aba = 'encerrados'" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+            :class="aba === 'encerrados' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            Encerrados / Histórico
+          </button>
+        </div>
         <button @click="carregarChamados" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
       </div>
 
@@ -828,30 +933,127 @@ const CorretivaModule = {
       <div v-else-if="erroChamados" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
         {{ erroChamados }}
       </div>
-      <div v-else-if="chamados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-        Nenhum chamado aberto no momento. 🎉
-      </div>
-      <div v-else class="space-y-3">
-        <div v-for="c in chamados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <div class="flex items-start justify-between gap-2 mb-2">
-            <div class="flex items-start gap-2 min-w-0">
-              <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
-              <div class="min-w-0">
-                <p class="font-semibold text-slate-800 truncate">{{ c.equipamento }}</p>
-                <p class="text-xs text-slate-400 truncate">{{ c.area }}</p>
+
+      <template v-else-if="aba === 'abertos'">
+        <div v-if="chamados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum chamado aberto no momento. 🎉
+        </div>
+        <div v-else class="space-y-3">
+          <div v-for="c in chamados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div class="flex items-start gap-2 min-w-0">
+                <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
+                <div class="min-w-0">
+                  <p class="font-semibold text-slate-800 truncate">{{ c.equipamento }}</p>
+                  <p class="text-xs text-slate-400 truncate">{{ c.area }}</p>
+                </div>
               </div>
+              <span class="text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap shrink-0" :class="corPrioridade(c.prioridade)">
+                {{ c.prioridade }}
+              </span>
             </div>
-            <span class="text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap shrink-0" :class="corPrioridade(c.prioridade)">
-              {{ c.prioridade }}
-            </span>
+            <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
+            <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mb-3">
+              <span>👤 {{ c.solicitante || "—" }}</span>
+              <span class="flex items-center gap-2">
+                <span class="font-semibold" :class="String(c.status).toLowerCase() === 'aberto' ? 'text-orange-600' : 'text-sky-600'">{{ c.status }}</span>
+                <span>{{ formatarData(c.data) }}</span>
+              </span>
+            </div>
+            <button @click="abrirModalEncerramento(c)"
+              class="btn-tap w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+              ⚙️ Atender / Encerrar Chamado
+            </button>
           </div>
-          <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
-          <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
-            <span>👤 {{ c.solicitante || "—" }}</span>
-            <span class="flex items-center gap-2">
-              <span class="font-semibold" :class="String(c.status).toLowerCase() === 'aberto' ? 'text-orange-600' : 'text-sky-600'">{{ c.status }}</span>
-              <span>{{ formatarData(c.data) }}</span>
-            </span>
+        </div>
+      </template>
+
+      <template v-else>
+        <div v-if="chamadosEncerrados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum chamado encerrado ainda.
+        </div>
+        <div v-else class="space-y-3">
+          <div v-for="c in chamadosEncerrados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm opacity-90">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div class="flex items-start gap-2 min-w-0">
+                <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
+                <div class="min-w-0">
+                  <p class="font-semibold text-slate-800 truncate">{{ c.equipamento }}</p>
+                  <p class="text-xs text-slate-400 truncate">{{ c.area }}</p>
+                </div>
+              </div>
+              <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 whitespace-nowrap shrink-0">
+                {{ c.status }}
+              </span>
+            </div>
+            <p class="text-sm text-slate-600 mb-1"><span class="text-slate-400">Falha relatada:</span> {{ c.descricao }}</p>
+            <p v-if="c.resolucao" class="text-sm text-slate-600 mb-2"><span class="text-slate-400">Resolução:</span> {{ c.resolucao }}</p>
+            <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
+              <span>🔧 {{ c.tecnico || c.solicitante || "—" }}</span>
+              <span>{{ formatarData(c.dataConclusao || c.data) }}</span>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- MODAL: Atender / Encerrar Chamado -->
+    <div v-if="modalAberto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4" @click.self="fecharModal">
+      <div class="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[92vh] overflow-y-auto">
+        <div class="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">Chamado #{{ chamadoSelecionado && chamadoSelecionado.id }}</h3>
+          <button @click="fecharModal" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+        </div>
+
+        <div v-if="chamadoSelecionado" class="p-5 space-y-4">
+          <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-1.5">
+            <p class="font-semibold text-slate-800">{{ chamadoSelecionado.equipamento }}</p>
+            <p class="text-sm text-slate-500">Área: {{ chamadoSelecionado.area }}</p>
+            <p class="text-sm text-slate-500 flex items-center gap-2">
+              Prioridade:
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full border" :class="corPrioridade(chamadoSelecionado.prioridade)">{{ chamadoSelecionado.prioridade }}</span>
+            </p>
+            <p class="text-sm text-slate-600 pt-1"><span class="text-slate-400">Relato original:</span> {{ chamadoSelecionado.descricao }}</p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Ações realizadas / Descrição do reparo *</label>
+            <textarea v-model="resolucaoTexto" rows="4" placeholder="Descreva o que foi feito para resolver o problema..."
+              class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Evidência da Conclusão (opcional)</label>
+            <div class="flex gap-2">
+              <button type="button" @click="inputCameraConclusaoRef.click()"
+                class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
+                📷 Tirar Foto
+              </button>
+              <button type="button" @click="inputGaleriaConclusaoRef.click()"
+                class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
+                📁 Selecionar Arquivo
+              </button>
+            </div>
+            <input ref="inputCameraConclusaoRef" type="file" accept="image/*" capture="environment" class="hidden" @change="onFotoConclusaoSelecionada" />
+            <input ref="inputGaleriaConclusaoRef" type="file" accept="image/*" class="hidden" @change="onFotoConclusaoSelecionada" />
+
+            <div v-if="fotoConclusaoBase64" class="mt-3 flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <img :src="fotoConclusaoBase64" class="w-16 h-16 object-cover rounded-md border border-slate-200" alt="Prévia da evidência de conclusão" />
+              <p class="text-xs text-slate-600 truncate flex-1">{{ fotoConclusaoNome }}</p>
+              <button type="button" @click="removerFotoConclusao" class="btn-tap text-red-600 hover:text-red-800 text-lg leading-none px-2">✕</button>
+            </div>
+          </div>
+
+          <div class="flex gap-2 pt-1">
+            <button @click="fecharModal" :disabled="encerrando"
+              class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-3 rounded-xl">
+              Cancelar
+            </button>
+            <button @click="confirmarEncerramento" :disabled="encerrando || !resolucaoTexto.trim()"
+              class="btn-tap flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl shadow-md">
+              <span v-if="encerrando" class="spinner"></span>
+              <span>{{ encerrando ? "Encerrando..." : "Concluir e Fechar Chamado" }}</span>
+            </button>
           </div>
         </div>
       </div>
