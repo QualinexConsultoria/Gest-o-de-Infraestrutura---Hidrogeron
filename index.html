@@ -176,14 +176,15 @@ const LoginScreen = {
           throw new Error((data && data.message) || "Não foi possível carregar os dados iniciais.");
         }
         const usuarios = data.usuarios || data.Usuarios || (data.data && data.data.usuarios) || [];
-        const emailInput = email.value.trim().toLowerCase();
-        const pinInput = pin.value.trim();
+        console.log(usuarios);
 
-        const found = usuarios.find(u => {
-          const uEmail = String(u.Email || u.email || "").trim().toLowerCase();
-          const uPin = String(u.PIN || u.Pin || u.pin || "").trim();
-          return uEmail === emailInput && uPin === pinInput;
-        });
+        const inputEmail = email.value.trim().toLowerCase();
+        const inputPin = pin.value.trim().toString();
+
+        const found = usuarios.find(u =>
+          (u.Email || u.email || "").toString().trim().toLowerCase() === inputEmail &&
+          (u.Senha_PIN || u.Senha || u.senha || u.PIN || u.pin || "").toString().trim() === inputPin
+        );
 
         if (!found) {
           errorMsg.value = "E-mail ou PIN inválidos.";
