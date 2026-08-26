@@ -252,19 +252,44 @@ const LoginScreen = {
 };
 
 /* ==========================================================================
-   MÓDULO PREVENTIVA
+   MÓDULO PREVENTIVA (navegação em 2 níveis: lista de equipamentos → checklist)
    ========================================================================== */
+function parseItensInspecao(str) {
+  return String(str || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeStatusInspecao(s) {
+  const v = String(s || "").trim().toLowerCase();
+  if (v === "c" || v === "conforme") return "C";
+  if (v === "nc" || v === "não conforme" || v === "nao conforme") return "NC";
+  if (v === "na" || v === "não aplicável" || v === "nao aplicavel" || v === "não aplicavel") return "NA";
+  return null;
+}
+
 const PreventivaModule = {
   props: { user: Object },
   setup(props) {
     const areas = AREAS;
     const areaSelecionada = ref(areas[0]);
     const equipamentos = ref([]);
+    const preventivasHistorico = ref([]);
     const loadingEquip = ref(false);
-    const salvando = ref(false);
-    const observacoes = reactive({});
-    const status = reactive({}); // { equipId: 'C' | 'NC' | 'NA' }
     const erroCarregamento = ref("");
+
+    // Nível 1 -> 2
+    const view = ref("lista"); // 'lista' | 'detalhe'
+    const equipamentoSelecionado = ref(null);
+    const itensChecklist = ref([]); // [{ texto, status }]
+    const descricaoNC = ref("");
+    const observacoesGerais = ref("");
+    const fotoBase64 = ref(null);
+    const fotoNome = ref("");
+    const salvando = ref(false);
+    const inputCameraRef = ref(null);
+    const inputGaleriaRef = ref(null);
 
     async function carregarEquipamentos() {
       loadingEquip.value = true;
@@ -278,13 +303,14 @@ const PreventivaModule = {
           return a === areaSelecionada.value.trim().toLowerCase();
         }).map(e => ({
           id: e.ID || e.Id || e.id || uid(),
+          idDisplay: e.ID || e.Id || e.id || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          modelo: e.Modelo || e.modelo || "",
           tag: e.TAG || e.Tag || e.tag || "",
+          itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
+            || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
-        equipamentos.value.forEach(eq => {
-          if (!(eq.id in status)) status[eq.id] = null;
-          if (!(eq.id in observacoes)) observacoes[eq.id] = "";
-        });
+        preventivasHistorico.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
       } catch (err) {
         console.error(err);
         erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
@@ -293,53 +319,146 @@ const PreventivaModule = {
       }
     }
 
-    function setStatus(id, value) {
-      status[id] = status[id] === value ? null : value;
+    function ultimaInspecao(equipId) {
+      let melhor = null;
+      preventivasHistorico.value.forEach(p => {
+        let statusBruto = null;
+        const pEquipId = p.equipamentoId || p.EquipamentoId || p.EquipamentoID || null;
+        if (pEquipId != null && String(pEquipId) === String(equipId)) {
+          statusBruto = p.statusGeral || p.StatusGeral || null;
+        } else if (Array.isArray(p.itens)) {
+          const match = p.itens.find(i => String(i.equipamentoId) === String(equipId));
+          if (match) statusBruto = match.status;
+        }
+        if (!statusBruto) return;
+        const d = new Date(p.data || p.Data || p.DataAbertura);
+        if (isNaN(d.getTime())) return;
+        if (!melhor || d > melhor.dataObj) {
+          melhor = { dataObj: d, status: normalizeStatusInspecao(statusBruto) };
+        }
+      });
+      return melhor;
     }
 
+    function formatarStatusLabel(status) {
+      if (status === "C") return "Conforme";
+      if (status === "NC") return "Não Conforme";
+      if (status === "NA") return "Não Aplicável";
+      return "—";
+    }
+
+    function badgeUltimaInspecao(equipId) {
+      const info = ultimaInspecao(equipId);
+      if (!info) return "bg-slate-100 text-slate-500";
+      if (info.status === "C") return "bg-emerald-100 text-emerald-700";
+      if (info.status === "NC") return "bg-red-100 text-red-700";
+      return "bg-slate-100 text-slate-600";
+    }
+
+    function formatarData(d) {
+      if (!d) return "-";
+      const dt = d instanceof Date ? d : new Date(d);
+      if (isNaN(dt.getTime())) return String(d);
+      return dt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function abrirEquipamento(eq) {
+      equipamentoSelecionado.value = eq;
+      itensChecklist.value = parseItensInspecao(eq.itensInspecao).map(texto => ({ texto, status: null }));
+      descricaoNC.value = "";
+      observacoesGerais.value = "";
+      fotoBase64.value = null;
+      fotoNome.value = "";
+      view.value = "detalhe";
+    }
+
+    function voltarLista() {
+      view.value = "lista";
+      equipamentoSelecionado.value = null;
+      itensChecklist.value = [];
+      descricaoNC.value = "";
+      observacoesGerais.value = "";
+      fotoBase64.value = null;
+      fotoNome.value = "";
+    }
+
+    function setItemStatus(idx, value) {
+      const item = itensChecklist.value[idx];
+      item.status = item.status === value ? null : value;
+    }
+
+    const temNC = computed(() => itensChecklist.value.some(i => i.status === "NC"));
+
     const progresso = computed(() => {
-      if (equipamentos.value.length === 0) return 0;
-      const preenchidos = equipamentos.value.filter(e => status[e.id]).length;
-      return Math.round((preenchidos / equipamentos.value.length) * 100);
+      if (itensChecklist.value.length === 0) return 0;
+      const preenchidos = itensChecklist.value.filter(i => i.status).length;
+      return Math.round((preenchidos / itensChecklist.value.length) * 100);
     });
 
-    async function enviarChecklist() {
-      const pendentes = equipamentos.value.filter(e => !status[e.id]);
-      if (equipamentos.value.length === 0) {
-        pushToast("Não há equipamentos para registrar nesta área.", "error");
+    function onFotoSelecionada(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        fotoBase64.value = reader.result;
+        fotoNome.value = file.name;
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    }
+
+    function removerFoto() {
+      fotoBase64.value = null;
+      fotoNome.value = "";
+    }
+
+    async function salvarInspecao() {
+      const pendentes = itensChecklist.value.filter(i => !i.status);
+      if (itensChecklist.value.length === 0) {
+        pushToast("Este equipamento não possui itens de inspeção cadastrados.", "error");
         return;
       }
       if (pendentes.length > 0) {
-        pushToast(`Classifique todos os itens antes de enviar (${pendentes.length} pendente(s)).`, "error");
+        pushToast(`Classifique todos os itens antes de salvar (${pendentes.length} pendente(s)).`, "error");
         return;
+      }
+      if (temNC.value) {
+        if (!descricaoNC.value.trim()) {
+          pushToast("Descreva a não conformidade encontrada.", "error");
+          return;
+        }
+        if (!fotoBase64.value) {
+          pushToast("Anexe uma foto como evidência da não conformidade.", "error");
+          return;
+        }
       }
       salvando.value = true;
       try {
-        const itens = equipamentos.value.map(e => ({
-          equipamentoId: e.id,
-          equipamento: e.nome,
-          tag: e.tag,
-          status: status[e.id],
-          observacao: observacoes[e.id] || "",
-        }));
         const payload = {
           action: "savePreventiva",
           area: areaSelecionada.value,
+          equipamentoId: equipamentoSelecionado.value.idDisplay || equipamentoSelecionado.value.id,
+          equipamento: equipamentoSelecionado.value.nome,
+          modelo: equipamentoSelecionado.value.modelo,
+          tag: equipamentoSelecionado.value.tag,
           responsavel: props.user.nome,
           email: props.user.email,
           data: nowISO(),
-          itens,
+          statusGeral: temNC.value ? "Não Conforme" : "Conforme",
+          itens: itensChecklist.value.map(i => ({ item: i.texto, status: i.status })),
+          descricaoNaoConformidade: temNC.value ? descricaoNC.value.trim() : "",
+          fotoBase64: temNC.value ? fotoBase64.value : null,
+          fotoNome: temNC.value ? fotoNome.value : "",
+          observacoes: observacoesGerais.value.trim(),
         };
         const resp = await apiPost(payload);
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
-        pushToast("Checklist preventivo enviado com sucesso!", "success");
-        equipamentos.value.forEach(e => {
-          status[e.id] = null;
-          observacoes[e.id] = "";
-        });
+        pushToast("Inspeção registrada com sucesso!", "success");
+        voltarLista();
+        await carregarEquipamentos();
       } catch (err) {
         console.error(err);
-        pushToast("Erro ao enviar checklist. Tente novamente.", "error");
+        pushToast("Erro ao salvar inspeção. Tente novamente.", "error");
       } finally {
         salvando.value = false;
       }
@@ -350,79 +469,157 @@ const PreventivaModule = {
 
     return {
       areas, areaSelecionada, equipamentos, loadingEquip, erroCarregamento,
-      status, observacoes, setStatus, progresso, salvando, enviarChecklist,
+      view, equipamentoSelecionado, itensChecklist, temNC, progresso,
+      descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
+      inputCameraRef, inputGaleriaRef,
+      abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
+      ultimaInspecao, formatarStatusLabel, badgeUltimaInspecao, formatarData,
     };
   },
   template: `
   <div class="space-y-5">
-    <div>
-      <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Área</label>
-      <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        <button v-for="a in areas" :key="a" @click="areaSelecionada = a"
-          class="btn-tap whitespace-nowrap px-4 py-2 rounded-full text-sm font-semibold border transition-colors"
-          :class="areaSelecionada === a ? 'bg-sky-600 border-sky-600 text-white shadow' : 'bg-white border-slate-300 text-slate-600'">
-          {{ a }}
+    <!-- NÍVEL 1: seleção de área + lista de equipamentos -->
+    <template v-if="view === 'lista'">
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Área</label>
+        <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button v-for="a in areas" :key="a" @click="areaSelecionada = a"
+            class="btn-tap whitespace-nowrap px-4 py-2 rounded-full text-sm font-semibold border transition-colors"
+            :class="areaSelecionada === a ? 'bg-sky-600 border-sky-600 text-white shadow' : 'bg-white border-slate-300 text-slate-600'">
+            {{ a }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="loadingEquip" class="flex justify-center py-12 text-slate-400">
+        <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+      </div>
+
+      <div v-else-if="erroCarregamento" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+        {{ erroCarregamento }}
+      </div>
+
+      <div v-else-if="equipamentos.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum equipamento cadastrado para esta área.
+      </div>
+
+      <div v-else class="space-y-3">
+        <button v-for="eq in equipamentos" :key="eq.id" @click="abrirEquipamento(eq)"
+          class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <p class="font-semibold text-slate-800 truncate">
+              <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
+            </p>
+            <p class="text-xs text-slate-400 mt-0.5 truncate">
+              <template v-if="ultimaInspecao(eq.id)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq.id).status) }} · {{ formatarData(ultimaInspecao(eq.id).dataObj) }}</template>
+              <template v-else>Sem inspeção registrada</template>
+            </p>
+          </div>
+          <span class="text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0" :class="badgeUltimaInspecao(eq.id)">
+            {{ ultimaInspecao(eq.id) ? formatarStatusLabel(ultimaInspecao(eq.id).status) : 'Pendente' }}
+          </span>
         </button>
       </div>
-    </div>
+    </template>
 
-    <div v-if="equipamentos.length" class="bg-white rounded-xl border border-slate-200 p-4">
-      <div class="flex justify-between text-xs font-semibold text-slate-500 mb-1">
-        <span>Progresso do checklist</span>
-        <span>{{ progresso }}%</span>
+    <!-- NÍVEL 2: execução do checklist do equipamento -->
+    <template v-else-if="equipamentoSelecionado">
+      <button @click="voltarLista" class="btn-tap flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-sky-600">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+        </svg>
+        <span>Voltar à lista de equipamentos</span>
+      </button>
+
+      <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <p class="font-bold text-slate-800">
+          <span v-if="equipamentoSelecionado.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ equipamentoSelecionado.idDisplay }}]</span>{{ equipamentoSelecionado.nome }}
+        </p>
+        <p v-if="equipamentoSelecionado.modelo" class="text-sm text-slate-500 mt-0.5">Modelo: {{ equipamentoSelecionado.modelo }}</p>
+        <p v-if="equipamentoSelecionado.tag" class="text-xs text-slate-400 font-mono mt-0.5">{{ equipamentoSelecionado.tag }}</p>
       </div>
-      <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-        <div class="h-full bg-sky-500 transition-all duration-300" :style="{ width: progresso + '%' }"></div>
+
+      <div v-if="itensChecklist.length" class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="flex justify-between text-xs font-semibold text-slate-500 mb-1">
+          <span>Progresso do checklist</span>
+          <span>{{ progresso }}%</span>
+        </div>
+        <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div class="h-full bg-sky-500 transition-all duration-300" :style="{ width: progresso + '%' }"></div>
+        </div>
       </div>
-    </div>
 
-    <div v-if="loadingEquip" class="flex justify-center py-12 text-slate-400">
-      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
-    </div>
+      <div v-if="itensChecklist.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum item de inspeção cadastrado para este equipamento.
+      </div>
 
-    <div v-else-if="erroCarregamento" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
-      {{ erroCarregamento }}
-    </div>
-
-    <div v-else-if="equipamentos.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-      Nenhum equipamento cadastrado para esta área.
-    </div>
-
-    <div v-else class="space-y-3">
-      <div v-for="eq in equipamentos" :key="eq.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-        <div class="flex items-start justify-between gap-2 mb-3">
-          <div>
-            <p class="font-semibold text-slate-800">{{ eq.nome }}</p>
-            <p v-if="eq.tag" class="text-xs text-slate-400 font-mono">{{ eq.tag }}</p>
+      <div v-else class="space-y-3">
+        <div v-for="(item, idx) in itensChecklist" :key="idx" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="font-semibold text-slate-800 mb-3">{{ item.texto }}</p>
+          <div class="grid grid-cols-3 gap-2">
+            <button @click="setItemStatus(idx, 'C')"
+              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+              :class="item.status === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
+              ✓ C
+            </button>
+            <button @click="setItemStatus(idx, 'NC')"
+              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+              :class="item.status === 'NC' ? 'bg-red-500 border-red-500 text-white' : 'bg-red-50 border-red-200 text-red-700'">
+              ✗ NC
+            </button>
+            <button @click="setItemStatus(idx, 'NA')"
+              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+              :class="item.status === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-600'">
+              - NA
+            </button>
           </div>
         </div>
-        <div class="grid grid-cols-3 gap-2 mb-3">
-          <button @click="setStatus(eq.id, 'C')"
-            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-            :class="status[eq.id] === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
-            C
-          </button>
-          <button @click="setStatus(eq.id, 'NC')"
-            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-            :class="status[eq.id] === 'NC' ? 'bg-red-500 border-red-500 text-white' : 'bg-red-50 border-red-200 text-red-700'">
-            NC
-          </button>
-          <button @click="setStatus(eq.id, 'NA')"
-            class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-            :class="status[eq.id] === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-600'">
-            NA
-          </button>
-        </div>
-        <textarea v-model="observacoes[eq.id]" rows="2" placeholder="Observações (opcional)"
-          class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
-      </div>
 
-      <button @click="enviarChecklist" :disabled="salvando"
-        class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md mt-2 sticky bottom-3">
-        <span v-if="salvando" class="spinner"></span>
-        <span>{{ salvando ? "Enviando..." : "Enviar Checklist" }}</span>
-      </button>
-    </div>
+        <div v-if="temNC" class="bg-red-50 border-2 border-red-200 rounded-xl p-4 space-y-3">
+          <p class="font-bold text-red-700 flex items-center gap-1.5">⚠️ Não Conformidade Detectada</p>
+
+          <div>
+            <label class="block text-xs font-semibold text-red-700 uppercase tracking-wide mb-1">Descrição detalhada da Não Conformidade *</label>
+            <textarea v-model="descricaoNC" rows="3" placeholder="Descreva o que foi encontrado..."
+              class="w-full rounded-lg border border-red-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-red-700 uppercase tracking-wide mb-1">Evidência Fotográfica *</label>
+            <div class="flex gap-2">
+              <button type="button" @click="inputCameraRef.click()"
+                class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-red-300 text-red-700 font-semibold py-2.5 rounded-lg text-sm">
+                📷 Tirar Foto
+              </button>
+              <button type="button" @click="inputGaleriaRef.click()"
+                class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-red-300 text-red-700 font-semibold py-2.5 rounded-lg text-sm">
+                📁 Carregar Arquivo/Galeria
+              </button>
+            </div>
+            <input ref="inputCameraRef" type="file" accept="image/*" capture="environment" class="hidden" @change="onFotoSelecionada" />
+            <input ref="inputGaleriaRef" type="file" accept="image/*" class="hidden" @change="onFotoSelecionada" />
+
+            <div v-if="fotoBase64" class="mt-3 flex items-center gap-3 bg-white border border-red-200 rounded-lg p-2">
+              <img :src="fotoBase64" class="w-16 h-16 object-cover rounded-md border border-slate-200" alt="Prévia da evidência fotográfica" />
+              <p class="text-xs text-slate-600 truncate flex-1">{{ fotoNome }}</p>
+              <button type="button" @click="removerFoto" class="btn-tap text-red-600 hover:text-red-800 text-lg leading-none px-2">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Observações gerais (opcional)</label>
+          <textarea v-model="observacoesGerais" rows="2" placeholder="Observações adicionais"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+        </div>
+
+        <button @click="salvarInspecao" :disabled="salvando"
+          class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md mt-2 sticky bottom-3">
+          <span v-if="salvando" class="spinner"></span>
+          <span>{{ salvando ? "Salvando..." : "Salvar Inspeção do Equipamento" }}</span>
+        </button>
+      </div>
+    </template>
   </div>`
 };
 
