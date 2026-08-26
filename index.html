@@ -46,25 +46,66 @@ const PRIORIDADES = [
 ];
 
 /* ==========================================================================
-   HELPERS DE API (JSONP-safe via fetch; Apps Script Web App aceita CORS
-   simples em GET e POST com text/plain para evitar preflight)
+   HELPERS DE API
+   O Apps Script Web App só dispensa o preflight de CORS se:
+   - GET não enviar headers customizados;
+   - POST usar Content-Type "text/plain;charset=utf-8" (nunca application/json);
+   - as duas chamadas usarem redirect: "follow" (o /exec responde com um
+     302 para script.googleusercontent.com que o fetch precisa seguir).
    ========================================================================== */
+async function handleApiResponse(res) {
+  if (!res.ok) {
+    throw new Error("Falha na comunicação com o servidor (HTTP " + res.status + ")");
+  }
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Resposta inválida do servidor (não é um JSON válido).");
+  }
+}
+
+// Wrapper genérico para qualquer ação via GET.
 async function apiGet(params) {
   const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_URL}?${qs}`, { method: "GET", redirect: "follow" });
-  if (!res.ok) throw new Error("Falha na comunicação com o servidor (" + res.status + ")");
-  return res.json();
+  let res;
+  try {
+    res = await fetch(`${API_URL}?${qs}`, { method: "GET", redirect: "follow" });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no GET:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
+}
+
+// Chamada explícita usada para autenticação e carga inicial de dados.
+async function getInitialData() {
+  let res;
+  try {
+    res = await fetch(`${API_URL}?action=getInitialData`, {
+      method: "GET",
+      redirect: "follow",
+    });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no getInitialData:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
 }
 
 async function apiPost(payload) {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    redirect: "follow",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error("Falha na comunicação com o servidor (" + res.status + ")");
-  return res.json();
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no POST:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
 }
 
 function uid() {
@@ -130,7 +171,7 @@ const LoginScreen = {
       }
       loading.value = true;
       try {
-        const data = await apiGet({ action: "getInitialData" });
+        const data = await getInitialData();
         if (!data || data.status === "error") {
           throw new Error((data && data.message) || "Não foi possível carregar os dados iniciais.");
         }
@@ -161,7 +202,9 @@ const LoginScreen = {
         emit("login-success", user);
       } catch (err) {
         console.error(err);
-        errorMsg.value = "Erro ao conectar com o servidor. Verifique sua conexão e tente novamente.";
+        errorMsg.value = err && err.message
+          ? err.message
+          : "Erro ao conectar com o servidor. Verifique sua conexão e tente novamente.";
       } finally {
         loading.value = false;
       }
@@ -227,7 +270,7 @@ const PreventivaModule = {
       erroCarregamento.value = "";
       equipamentos.value = [];
       try {
-        const data = await apiGet({ action: "getInitialData" });
+        const data = await getInitialData();
         const todos = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
         equipamentos.value = todos.filter(e => {
           const a = String(e.Area || e.area || "").trim().toLowerCase();
@@ -405,7 +448,7 @@ const CorretivaModule = {
       loadingChamados.value = true;
       erroChamados.value = "";
       try {
-        const data = await apiGet({ action: "getInitialData" });
+        const data = await getInitialData();
         const lista = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
         chamados.value = lista
           .map(c => ({
@@ -619,7 +662,7 @@ const DashboardModule = {
       loading.value = true;
       erro.value = "";
       try {
-        const data = await apiGet({ action: "getInitialData" });
+        const data = await getInitialData();
         preventivas.value = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
         corretivas.value = (data.chamados || data.Chamados || (data.data && data.data.chamados) || []).map(c => ({
           area: c.Area || c.area || "",
