@@ -39,8 +39,8 @@ const STORAGE_USER_KEY = "hidrogeron_user";
 
 const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidráulica", "Oficina"];
 const PRIORIDADES = [
-  { value: "Baixa",   color: "bg-slate-100 text-slate-700 border-slate-300" },
-  { value: "Média",   color: "bg-amber-100 text-amber-700 border-amber-300" },
+  { value: "Baixa",   color: "bg-blue-100 text-blue-700 border-blue-300" },
+  { value: "Média",   color: "bg-yellow-100 text-yellow-700 border-yellow-300" },
   { value: "Alta",    color: "bg-orange-100 text-orange-700 border-orange-300" },
   { value: "Crítica", color: "bg-red-100 text-red-700 border-red-300" },
 ];
@@ -154,8 +154,14 @@ function extractPreventivas(data) {
 }
 
 function extractCorretivas(data) {
-  const raw = data.chamados || data.Chamados || (data.data && data.data.chamados) || [];
+  const raw = data.chamados || data.Chamados || data.corretivas || data.Corretivas
+    || (data.data && (data.data.chamados || data.data.corretivas)) || [];
   return raw.map(normalizeCorretivaChamado);
+}
+
+function isStatusChamadoAberto(status) {
+  const s = String(status || "").trim().toLowerCase();
+  return s === "aberto" || s === "em andamento";
 }
 
 /* ==========================================================================
@@ -687,7 +693,7 @@ const CorretivaModule = {
       try {
         const data = await getInitialData();
         chamados.value = extractCorretivas(data)
-          .filter(c => String(c.status).toLowerCase() !== "concluído" && String(c.status).toLowerCase() !== "concluido")
+          .filter(c => isStatusChamadoAberto(c.status))
           .sort((a, b) => new Date(b.data) - new Date(a.data));
       } catch (err) {
         console.error(err);
@@ -708,23 +714,36 @@ const CorretivaModule = {
       }
       enviando.value = true;
       try {
+        const dataAbertura = new Date().toISOString().replace("T", " ").substring(0, 16);
         const payload = {
           action: "saveCorretiva",
           area: form.area,
           equipamento: form.equipamento.trim(),
+          descricaoProblema: form.descricao.trim(),
           prioridade: form.prioridade,
-          descricao: form.descricao.trim(),
-          solicitante: props.user.nome,
-          email: props.user.email,
-          data: nowISO(),
-          status: "Aberto",
+          solicitante: props.user.nome || "Produção",
+          dataAbertura,
         };
         const resp = await apiPost(payload);
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
-        pushToast("Chamado aberto com sucesso!", "success");
+
         form.equipamento = "";
         form.descricao = "";
         form.prioridade = "Média";
+
+        // Feedback visual instantâneo: insere o chamado localmente antes de resincronizar com a planilha.
+        chamados.value.unshift({
+          id: (resp && (resp.id || resp.ID)) || uid(),
+          area: payload.area,
+          equipamento: payload.equipamento,
+          descricao: payload.descricaoProblema,
+          prioridade: payload.prioridade,
+          solicitante: payload.solicitante,
+          status: "Aberto",
+          data: dataAbertura,
+        });
+
+        pushToast("Chamado aberto com sucesso!", "success");
         await carregarChamados();
       } catch (err) {
         console.error(err);
@@ -815,18 +834,24 @@ const CorretivaModule = {
       <div v-else class="space-y-3">
         <div v-for="c in chamados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <div class="flex items-start justify-between gap-2 mb-2">
-            <div>
-              <p class="font-semibold text-slate-800">{{ c.equipamento }}</p>
-              <p class="text-xs text-slate-400">{{ c.area }} · {{ formatarData(c.data) }}</p>
+            <div class="flex items-start gap-2 min-w-0">
+              <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
+              <div class="min-w-0">
+                <p class="font-semibold text-slate-800 truncate">{{ c.equipamento }}</p>
+                <p class="text-xs text-slate-400 truncate">{{ c.area }}</p>
+              </div>
             </div>
-            <span class="text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap" :class="corPrioridade(c.prioridade)">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap shrink-0" :class="corPrioridade(c.prioridade)">
               {{ c.prioridade }}
             </span>
           </div>
           <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
           <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
             <span>👤 {{ c.solicitante || "—" }}</span>
-            <span class="font-semibold text-sky-600">{{ c.status }}</span>
+            <span class="flex items-center gap-2">
+              <span class="font-semibold" :class="String(c.status).toLowerCase() === 'aberto' ? 'text-orange-600' : 'text-sky-600'">{{ c.status }}</span>
+              <span>{{ formatarData(c.data) }}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -846,8 +871,8 @@ const DashboardModule = {
     const filtroTipo = ref("todos");
 
     const stats = computed(() => {
-      const abertos = corretivas.value.filter(c => String(c.status).toLowerCase() === "aberto").length;
-      const criticos = corretivas.value.filter(c => c.prioridade === "Crítica" && String(c.status).toLowerCase() === "aberto").length;
+      const abertos = corretivas.value.filter(c => isStatusChamadoAberto(c.status)).length;
+      const criticos = corretivas.value.filter(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status)).length;
       const naoConformes = preventivas.value.filter(p => p.status === "NC").length;
       return {
         totalPreventivas: preventivas.value.length,
@@ -986,10 +1011,7 @@ const HomeHub = {
     async function carregarContagemAbertos() {
       try {
         const data = await getInitialData();
-        abertosCount.value = extractCorretivas(data).filter(c => {
-          const st = String(c.status).toLowerCase();
-          return st !== "concluído" && st !== "concluido";
-        }).length;
+        abertosCount.value = extractCorretivas(data).filter(c => isStatusChamadoAberto(c.status)).length;
       } catch (err) {
         console.error(err);
         abertosCount.value = null;
