@@ -402,18 +402,28 @@ function normalizeStatusInspecao(s) {
   return null;
 }
 
+const MESES_PT = [
+  { v: 1, l: "Janeiro" }, { v: 2, l: "Fevereiro" }, { v: 3, l: "Março" }, { v: 4, l: "Abril" },
+  { v: 5, l: "Maio" }, { v: 6, l: "Junho" }, { v: 7, l: "Julho" }, { v: 8, l: "Agosto" },
+  { v: 9, l: "Setembro" }, { v: 10, l: "Outubro" }, { v: 11, l: "Novembro" }, { v: 12, l: "Dezembro" },
+];
+const HISTORICO_POR_PAGINA = 20;
+
 const PreventivaModule = {
   props: { user: Object },
+  emits: ["go-home"],
   setup(props) {
     const areas = AREAS;
-    const areaSelecionada = ref(areas[0]);
-    const equipamentos = ref([]);
+    const meses = MESES_PT;
+
+    const todosEquipamentos = ref([]);
     const preventivasHistorico = ref([]);
-    const loadingEquip = ref(false);
+    const loadingDados = ref(false);
     const erroCarregamento = ref("");
 
-    // Nível 1 -> 2
-    const view = ref("lista"); // 'lista' | 'detalhe'
+    // 'setores' -> 'lista' -> 'detalhe' | 'historico' (aba irmã de 'setores')
+    const view = ref("setores");
+    const areaSelecionada = ref(null);
     const equipamentoSelecionado = ref(null);
     const itensChecklist = ref([]); // [{ texto, status }]
     const descricaoNC = ref("");
@@ -424,45 +434,58 @@ const PreventivaModule = {
     const inputCameraRef = ref(null);
     const inputGaleriaRef = ref(null);
 
-    async function carregarEquipamentos(opts) {
+    // Filtros do Histórico de Inspeções
+    const filtroAno = ref("todos");
+    const filtroMes = ref("todos");
+    const filtroArea = ref("todas");
+    const filtroBusca = ref("");
+    const filtroStatus = ref("todos"); // 'todos' | 'C' | 'NC'
+    const paginaHistorico = ref(1);
+
+    async function carregarDados(opts) {
       const silencioso = opts && opts.silencioso;
       if (!silencioso) {
-        loadingEquip.value = true;
+        loadingDados.value = true;
         erroCarregamento.value = "";
       }
       try {
         const data = await getInitialData();
         const todos = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
-        equipamentos.value = todos.filter(e => {
-          const a = String(e.Area || e.area || "").trim().toLowerCase();
-          return a === areaSelecionada.value.trim().toLowerCase();
-        }).map(e => ({
+        todosEquipamentos.value = todos.map(e => ({
           id: e.ID || e.Id || e.id || uid(),
           idDisplay: e.ID || e.Id || e.id || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
           modelo: e.Modelo || e.modelo || "",
           tag: e.TAG || e.Tag || e.tag || "",
+          area: e.Area || e.area || "",
           itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
             || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
         preventivasHistorico.value = extractPreventivas(data);
       } catch (err) {
         console.error(err);
-        if (!silencioso) erroCarregamento.value = "Não foi possível carregar os equipamentos desta área.";
+        if (!silencioso) erroCarregamento.value = "Não foi possível carregar os dados da Preventiva.";
       } finally {
-        if (!silencioso) loadingEquip.value = false;
+        if (!silencioso) loadingDados.value = false;
       }
     }
 
+    function equipamentosDaArea(area) {
+      const alvo = String(area || "").trim().toLowerCase();
+      return todosEquipamentos.value.filter(e => e.area.trim().toLowerCase() === alvo);
+    }
+
+    const equipamentosDaAreaAtual = computed(() => equipamentosDaArea(areaSelecionada.value));
+
     // O log de preventivas não traz o ID do equipamento, então o casamento
-    // é feito por nome do equipamento (+ área, quando disponível).
+    // é feito por nome do equipamento + área do próprio equipamento.
     function ultimaInspecao(eq) {
       let melhor = null;
       const nomeAlvo = String(eq.nome || "").trim().toLowerCase();
       preventivasHistorico.value.forEach(p => {
         const nomeLog = String(p.equipamento || "").trim().toLowerCase();
         if (!nomeLog || nomeLog !== nomeAlvo) return;
-        if (p.area && areaSelecionada.value && p.area.trim().toLowerCase() !== areaSelecionada.value.trim().toLowerCase()) return;
+        if (p.area && eq.area && p.area.trim().toLowerCase() !== eq.area.trim().toLowerCase()) return;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return;
         if (!melhor || d > melhor.dataObj) {
@@ -501,12 +524,22 @@ const PreventivaModule = {
       };
     }
 
+    // Cards do nível "Setores": total de equipamentos e pendências por área.
+    const statsPorArea = computed(() => {
+      return areas.map(a => {
+        const lista = equipamentosDaArea(a);
+        const pendentes = lista.filter(eq => statusCicloEquipamento(eq).label === "Pendente").length;
+        return { area: a, total: lista.length, pendentes };
+      });
+    });
+
     // Progresso do setor selecionado: quantos equipamentos já estão em dia
     // (inspecionados no ciclo dos últimos 7 dias) vs. o total da área.
     const progressoSetor = computed(() => {
-      const total = equipamentos.value.length;
+      const lista = equipamentosDaAreaAtual.value;
+      const total = lista.length;
       if (total === 0) return { feitos: 0, total: 0, pct: 0 };
-      const feitos = equipamentos.value.filter(eq => statusCicloEquipamento(eq).label !== "Pendente").length;
+      const feitos = lista.filter(eq => statusCicloEquipamento(eq).label !== "Pendente").length;
       return { feitos, total, pct: Math.round((feitos / total) * 100) };
     });
 
@@ -515,6 +548,20 @@ const PreventivaModule = {
       const dt = d instanceof Date ? d : new Date(d);
       if (isNaN(dt.getTime())) return String(d);
       return dt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function abrirArea(area) {
+      areaSelecionada.value = area;
+      view.value = "lista";
+    }
+
+    function voltarSetores() {
+      areaSelecionada.value = null;
+      view.value = "setores";
+    }
+
+    function abrirHistorico() {
+      view.value = "historico";
     }
 
     function abrirEquipamento(eq) {
@@ -642,7 +689,7 @@ const PreventivaModule = {
 
         // NÃO recarrega a API imediatamente — a planilha pode levar um instante
         // para consolidar a escrita. Sincroniza em segundo plano só depois de 3s.
-        setTimeout(() => carregarEquipamentos({ silencioso: true }), 3000);
+        setTimeout(() => carregarDados({ silencioso: true }), 3000);
       } catch (err) {
         console.error(err);
         pushToast("Erro ao salvar inspeção. Tente novamente.", "error");
@@ -651,34 +698,136 @@ const PreventivaModule = {
       }
     }
 
-    onMounted(carregarEquipamentos);
-    watch(areaSelecionada, carregarEquipamentos);
+    // ===== Histórico de Inspeções (filtros combinados) =====
+    const anosDisponiveis = computed(() => {
+      const anos = new Set();
+      preventivasHistorico.value.forEach(p => {
+        const d = new Date(p.data);
+        if (!isNaN(d.getTime())) anos.add(d.getFullYear());
+      });
+      return Array.from(anos).sort((a, b) => b - a);
+    });
+
+    const historicoFiltrado = computed(() => {
+      const termo = filtroBusca.value.trim().toLowerCase();
+      return preventivasHistorico.value.filter(p => {
+        const d = new Date(p.data);
+        if (filtroAno.value !== "todos") {
+          if (isNaN(d.getTime()) || d.getFullYear() !== Number(filtroAno.value)) return false;
+        }
+        if (filtroMes.value !== "todos") {
+          if (isNaN(d.getTime()) || (d.getMonth() + 1) !== Number(filtroMes.value)) return false;
+        }
+        if (filtroArea.value !== "todas") {
+          if (String(p.area || "").trim().toLowerCase() !== filtroArea.value.trim().toLowerCase()) return false;
+        }
+        if (filtroStatus.value !== "todos" && p.status !== filtroStatus.value) return false;
+        if (termo) {
+          const alvo = `${p.equipamento || ""} ${p.id || ""}`.toLowerCase();
+          if (!alvo.includes(termo)) return false;
+        }
+        return true;
+      }).sort((a, b) => new Date(b.data) - new Date(a.data));
+    });
+
+    const historicoPaginado = computed(() => historicoFiltrado.value.slice(0, paginaHistorico.value * HISTORICO_POR_PAGINA));
+
+    watch([filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus], () => {
+      paginaHistorico.value = 1;
+    });
+
+    function limparFiltrosHistorico() {
+      filtroAno.value = "todos";
+      filtroMes.value = "todos";
+      filtroArea.value = "todas";
+      filtroBusca.value = "";
+      filtroStatus.value = "todos";
+      paginaHistorico.value = 1;
+    }
+
+    function carregarMaisHistorico() {
+      paginaHistorico.value += 1;
+    }
+
+    onMounted(carregarDados);
 
     return {
-      areas, areaSelecionada, equipamentos, loadingEquip, erroCarregamento, progressoSetor,
-      view, equipamentoSelecionado, itensChecklist, temNC, progresso,
+      areas, meses, view, areaSelecionada, equipamentoSelecionado,
+      loadingDados, erroCarregamento, statsPorArea, equipamentosDaAreaAtual, progressoSetor,
+      itensChecklist, temNC, progresso,
       descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
       inputCameraRef, inputGaleriaRef,
+      abrirArea, voltarSetores, abrirHistorico,
       abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
       ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData,
+      filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, anosDisponiveis,
+      historicoFiltrado, historicoPaginado, limparFiltrosHistorico, carregarMaisHistorico,
     };
   },
   template: `
   <div class="space-y-5">
-    <!-- NÍVEL 1: seleção de área + lista de equipamentos -->
-    <template v-if="view === 'lista'">
-      <div>
-        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Área</label>
-        <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-          <button v-for="a in areas" :key="a" @click="areaSelecionada = a"
-            class="btn-tap whitespace-nowrap px-4 py-2 rounded-full text-sm font-semibold border transition-colors"
-            :class="areaSelecionada === a ? 'bg-sky-600 border-sky-600 text-white shadow' : 'bg-white border-slate-300 text-slate-600'">
-            {{ a }}
+    <!-- Breadcrumb -->
+    <nav class="flex items-center gap-1.5 text-xs font-medium text-slate-400 flex-wrap">
+      <button @click="$emit('go-home')" class="hover:text-sky-600 transition-colors btn-tap">Início</button>
+      <span>›</span>
+      <button @click="voltarSetores" class="hover:text-sky-600 transition-colors btn-tap"
+        :class="(view === 'setores' || view === 'historico') ? 'text-slate-700 font-semibold' : ''">Preventiva</button>
+      <template v-if="areaSelecionada && (view === 'lista' || view === 'detalhe')">
+        <span>›</span>
+        <button @click="abrirArea(areaSelecionada)" class="hover:text-sky-600 transition-colors btn-tap"
+          :class="view === 'lista' ? 'text-slate-700 font-semibold' : ''">{{ areaSelecionada }}</button>
+      </template>
+      <template v-if="view === 'detalhe' && equipamentoSelecionado">
+        <span>›</span>
+        <span class="text-slate-700 font-semibold truncate max-w-[160px]">{{ equipamentoSelecionado.nome }}</span>
+      </template>
+    </nav>
+
+    <!-- Abas de topo: Áreas | Histórico de Inspeções -->
+    <div v-if="view === 'setores' || view === 'historico'" class="flex gap-2">
+      <button @click="voltarSetores" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+        :class="view === 'setores' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+        Áreas
+      </button>
+      <button @click="abrirHistorico" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+        :class="view === 'historico' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+        Histórico de Inspeções
+      </button>
+    </div>
+
+    <!-- NÍVEL 0: grid de setores -->
+    <template v-if="view === 'setores'">
+      <div v-if="loadingDados" class="flex justify-center py-12 text-slate-400">
+        <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+      </div>
+      <div v-else-if="erroCarregamento" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+        {{ erroCarregamento }}
+      </div>
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div v-for="s in statsPorArea" :key="s.area"
+          class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all">
+          <h3 class="font-bold text-slate-800 text-base mb-3">{{ s.area }}</h3>
+          <div class="flex items-center gap-6 mb-4">
+            <div>
+              <p class="text-2xl font-extrabold text-slate-700">{{ s.total }}</p>
+              <p class="text-[11px] text-slate-400 uppercase font-semibold tracking-wide">Equipamentos</p>
+            </div>
+            <div>
+              <p class="text-2xl font-extrabold" :class="s.pendentes > 0 ? 'text-amber-600' : 'text-emerald-600'">{{ s.pendentes }}</p>
+              <p class="text-[11px] text-slate-400 uppercase font-semibold tracking-wide">Pendentes no ciclo</p>
+            </div>
+          </div>
+          <button @click="abrirArea(s.area)"
+            class="btn-tap w-full bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+            Acessar Área →
           </button>
         </div>
       </div>
+    </template>
 
-      <div v-if="loadingEquip" class="flex justify-center py-12 text-slate-400">
+    <!-- NÍVEL 1: lista de equipamentos da área -->
+    <template v-else-if="view === 'lista'">
+      <div v-if="loadingDados" class="flex justify-center py-12 text-slate-400">
         <span class="spinner !border-slate-300 !border-t-sky-600"></span>
       </div>
 
@@ -686,7 +835,7 @@ const PreventivaModule = {
         {{ erroCarregamento }}
       </div>
 
-      <div v-else-if="equipamentos.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      <div v-else-if="equipamentosDaAreaAtual.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
         Nenhum equipamento cadastrado para esta área.
       </div>
 
@@ -702,7 +851,7 @@ const PreventivaModule = {
         </div>
 
         <div class="space-y-3">
-          <button v-for="eq in equipamentos" :key="eq.id" @click="abrirEquipamento(eq)"
+          <button v-for="eq in equipamentosDaAreaAtual" :key="eq.id" @click="abrirEquipamento(eq)"
             class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
             <div class="min-w-0">
               <p class="font-semibold text-slate-800 truncate">
@@ -722,7 +871,7 @@ const PreventivaModule = {
     </template>
 
     <!-- NÍVEL 2: execução do checklist do equipamento -->
-    <template v-else-if="equipamentoSelecionado">
+    <template v-else-if="view === 'detalhe' && equipamentoSelecionado">
       <button @click="voltarLista" class="btn-tap flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-sky-600">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
@@ -816,6 +965,71 @@ const PreventivaModule = {
           class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md mt-2 sticky bottom-3">
           <span v-if="salvando" class="spinner"></span>
           <span>{{ salvando ? "Salvando..." : "Salvar Inspeção do Equipamento" }}</span>
+        </button>
+      </div>
+    </template>
+
+    <!-- ABA: Histórico de Inspeções -->
+    <template v-else-if="view === 'historico'">
+      <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todos">Ano: Todos</option>
+            <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <select v-model="filtroMes" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todos">Mês: Todos</option>
+            <option v-for="m in meses" :key="m.v" :value="m.v">{{ m.l }}</option>
+          </select>
+          <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Setor: Todos</option>
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </div>
+
+        <input v-model="filtroBusca" type="text" placeholder="Buscar por equipamento ou ID..."
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+
+        <div class="flex gap-1.5">
+          <button v-for="s in [{v:'todos', l:'Todos'}, {v:'C', l:'Conforme'}, {v:'NC', l:'Não Conforme'}]" :key="s.v"
+            @click="filtroStatus = s.v"
+            class="btn-tap flex-1 px-2 py-2 rounded-lg text-xs font-semibold border whitespace-nowrap"
+            :class="filtroStatus === s.v ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            {{ s.l }}
+          </button>
+        </div>
+
+        <button @click="limparFiltrosHistorico" class="text-sky-600 text-xs font-semibold btn-tap">✕ Limpar Filtros</button>
+      </div>
+
+      <p class="text-xs text-slate-400">{{ historicoFiltrado.length }} registro(s) encontrado(s)</p>
+
+      <div v-if="historicoFiltrado.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum registro encontrado para os filtros selecionados.
+      </div>
+
+      <div v-else class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+        <div v-for="h in historicoPaginado" :key="h.id" class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+          <div class="flex items-start justify-between gap-2 mb-1">
+            <div class="min-w-0">
+              <p class="font-semibold text-slate-800 truncate">{{ h.equipamento || 'Equipamento' }}</p>
+              <p class="text-xs text-slate-400 truncate">{{ h.area }} · #{{ h.id }}</p>
+            </div>
+            <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
+              :class="h.status === 'NC' ? 'bg-red-100 text-red-700' : h.status === 'NA' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
+              {{ formatarStatusLabel(h.status) }}
+            </span>
+          </div>
+          <p v-if="h.observacoes" class="text-sm text-slate-600 mt-1">{{ h.observacoes }}</p>
+          <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
+            <span>👤 {{ h.usuario || '—' }}</span>
+            <span>{{ formatarData(h.data) }}</span>
+          </div>
+        </div>
+
+        <button v-if="historicoPaginado.length < historicoFiltrado.length" @click="carregarMaisHistorico"
+          class="btn-tap w-full text-sky-600 text-sm font-semibold py-2.5">
+          Mostrar mais ({{ historicoFiltrado.length - historicoPaginado.length }} restantes)
         </button>
       </div>
     </template>
@@ -1688,7 +1902,7 @@ const App = {
       <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
         <transition name="fade" mode="out-in">
           <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" key="home"></home-hub>
-          <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" key="prev"></preventiva-module>
+          <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" @go-home="irParaHome" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
           <indicadores-module v-else-if="currentView === 'indicadores'" key="ind"></indicadores-module>
           <dashboard-module v-else key="dash"></dashboard-module>
