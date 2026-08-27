@@ -400,7 +400,7 @@ const LoginScreen = {
    ========================================================================== */
 function parseItensInspecao(str) {
   return String(str || "")
-    .split(",")
+    .split(/[,\n]+/)
     .map(s => s.trim())
     .filter(Boolean);
 }
@@ -619,24 +619,37 @@ const LaudoPreventivaModal = {
         </div>
 
         <!-- Matriz de Verificação -->
-        <div v-if="laudo.itens && laudo.itens.length">
+        <div>
           <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Matriz de Verificação</h4>
-          <div class="border border-slate-200 rounded-lg overflow-hidden">
-            <div v-for="(item, idx) in laudo.itens" :key="idx"
-              class="flex items-center justify-between gap-2 px-3 py-2 text-sm"
-              :class="idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'">
-              <div class="min-w-0">
-                <span class="text-slate-700">{{ item.texto }}</span>
-                <span v-if="item.periodicidade" class="text-[10px] font-bold text-slate-400 uppercase tracking-wide ml-1.5">({{ item.periodicidade }})</span>
-              </div>
-              <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
-                :class="item.status === 'NC' ? 'bg-red-100 text-red-700' : item.status === 'NA' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
-                {{ formatarStatusItem(item.status) }}
-              </span>
-            </div>
+          <div class="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto">
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr class="bg-slate-100 text-slate-600 text-[11px] uppercase tracking-wide">
+                  <th class="text-left font-bold px-2 py-1.5 w-8">#</th>
+                  <th class="text-left font-bold px-2 py-1.5">Item / Ponto de Inspeção</th>
+                  <th class="text-left font-bold px-2 py-1.5">Critério / Descrição</th>
+                  <th class="text-left font-bold px-2 py-1.5 whitespace-nowrap">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(item, idx) in laudo.itens" :key="idx" :class="idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'">
+                  <td class="px-2 py-2 align-top text-slate-400">{{ idx + 1 }}</td>
+                  <td class="px-2 py-2 align-top text-slate-700">{{ item.texto }}</td>
+                  <td class="px-2 py-2 align-top text-slate-500">{{ item.periodicidade ? 'Periodicidade: ' + item.periodicidade : '—' }}</td>
+                  <td class="px-2 py-2 align-top whitespace-nowrap">
+                    <span class="text-xs font-bold px-2 py-0.5 rounded-full"
+                      :class="item.status === 'NC' ? 'bg-red-100 text-red-700' : item.status === 'NA' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
+                      {{ formatarStatusItem(item.status) }} ({{ item.status || '-' }})
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="!laudo.itens || !laudo.itens.length">
+                  <td colspan="4" class="px-2 py-3 text-center text-xs text-slate-400 italic">Nenhum item de inspeção cadastrado para este equipamento.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
-        <p v-else class="text-xs text-slate-400 italic">Detalhamento por item não disponível para este registro histórico — apenas o resultado geral foi preservado.</p>
 
         <!-- Observações e Anomalias -->
         <div>
@@ -868,6 +881,52 @@ const PreventivaModule = {
     function ativoDoEquipamento(eq) {
       const chave = chaveAtivo(eq);
       return ativosAgrupados.value.find(a => a.chave === chave) || { ...eq, perfis: [eq] };
+    }
+
+    // Casamento do mesmo tipo usado em ultimaInspecao/logNoMes (nome + área do
+    // log), mas devolvendo o ativo já agrupado — usado para reconstituir a
+    // Matriz de Verificação de registros do Histórico.
+    function ativoPorNomeArea(nome, area) {
+      const nomeAlvo = String(nome || "").trim().toLowerCase();
+      const areaAlvo = String(area || "").trim().toLowerCase();
+      return ativosAgrupados.value.find(a =>
+        a.nome.trim().toLowerCase() === nomeAlvo && (!areaAlvo || a.area.trim().toLowerCase() === areaAlvo)
+      );
+    }
+
+    // Reconstitui a Matriz de Verificação de um registro que não guardou o
+    // detalhamento por item (todo registro salvo antes desta versão, ou
+    // qualquer log retroativo): busca os itens recomendados cadastrados no
+    // ativo (todos os perfis/periodicidades) e aplica o resultado geral do
+    // log a cada item. Quando o log é Não Conforme, tenta identificar nas
+    // observações quais itens específicos foram apontados — o restante é
+    // preenchido como Conforme.
+    function montarItensLaudoHistorico(ativo, statusGeral, observacoes) {
+      if (!ativo) return [];
+      const vistos = new Set();
+      const itens = [];
+      (ativo.perfis || []).forEach(perfil => {
+        parseItensInspecao(perfil.itensInspecao).forEach(texto => {
+          const chave = texto.trim().toLowerCase();
+          if (vistos.has(chave)) return;
+          vistos.add(chave);
+          itens.push({ texto, periodicidade: perfil.periodicidade, status: "C" });
+        });
+      });
+      if (statusGeral === "NC") {
+        const obsAlvo = String(observacoes || "").trim().toLowerCase();
+        let algumApontado = false;
+        itens.forEach(item => {
+          if (obsAlvo && obsAlvo.includes(item.texto.trim().toLowerCase())) {
+            item.status = "NC";
+            algumApontado = true;
+          }
+        });
+        // Anotações não citam nenhum item específico: sem como isolar qual
+        // item falhou, o resultado geral (Não Conforme) é aplicado a todos.
+        if (!algumApontado) itens.forEach(item => { item.status = "NC"; });
+      }
+      return itens;
     }
 
     function formatarStatusLabel(status) {
@@ -1129,25 +1188,22 @@ const PreventivaModule = {
     }
 
     // Abre o laudo de um registro do Histórico. O log salvo não guarda o
-    // detalhamento por item nem a foto — apenas o resultado geral é exibido
-    // (ver aviso na própria ficha).
+    // detalhamento por item nem a foto — a Matriz de Verificação é
+    // reconstituída a partir dos itens cadastrados no ativo (ver
+    // montarItensLaudoHistorico).
     function abrirLaudoHistorico(h) {
-      const nomeAlvo = String(h.equipamento || "").trim().toLowerCase();
-      const areaAlvo = String(h.area || "").trim().toLowerCase();
-      const eq = todosEquipamentos.value.find(e =>
-        e.nome.trim().toLowerCase() === nomeAlvo && (!areaAlvo || e.area.trim().toLowerCase() === areaAlvo)
-      );
+      const ativo = ativoPorNomeArea(h.equipamento, h.area);
       laudoAtual.value = {
         idLog: h.id,
         dataHora: h.data,
         area: h.area,
-        equipamentoIdDisplay: eq ? eq.idDisplay : "",
+        equipamentoIdDisplay: ativo ? ativo.idDisplay : "",
         equipamentoNome: h.equipamento,
-        modelo: eq ? eq.modelo : "",
-        periodicidade: eq ? eq.periodicidade : "",
+        modelo: ativo ? ativo.modelo : "",
+        periodicidade: ativo ? (ativo.perfis || []).map(p => p.periodicidade).filter(Boolean).join(" + ") : "",
         inspetor: h.usuario,
         statusGeral: formatarStatusLabel(h.status),
-        itens: null,
+        itens: montarItensLaudoHistorico(ativo, h.status, h.observacoes),
         observacoes: h.observacoes,
         fotoBase64: null,
       };
