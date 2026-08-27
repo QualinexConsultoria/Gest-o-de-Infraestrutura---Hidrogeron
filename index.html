@@ -444,6 +444,49 @@ function diasPeriodicidade(periodicidade) {
   return PERIODICIDADE_DIAS[v] || null;
 }
 
+// ===== Calendário Mestre: agendamento mensal por periodicidade =====
+// Quantos meses de intervalo entre execuções programadas de cada periodicidade.
+const PERIODICIDADE_STEP_MESES = {
+  "diária": 1, "diaria": 1, "semanal": 1, "quinzenal": 1,
+  "mensal": 1, "bimestral": 2, "trimestral": 3, "semestral": 6, "anual": 12,
+};
+function stepMesesPeriodicidade(p) {
+  const v = String(p || "").trim().toLowerCase();
+  return PERIODICIDADE_STEP_MESES[v] || 1;
+}
+
+const PERIODICIDADE_TAG = {
+  "diária": "D", "diaria": "D", "semanal": "Sm", "quinzenal": "Q",
+  "mensal": "M", "bimestral": "B", "trimestral": "T", "semestral": "S", "anual": "A",
+};
+function tagPeriodicidade(p) {
+  const v = String(p || "").trim().toLowerCase();
+  return PERIODICIDADE_TAG[v] || (p ? String(p).trim().charAt(0).toUpperCase() : "?");
+}
+
+// Meses (1-12) em que a periodicidade do item/equipamento cai, a partir de um
+// mês de referência (âncora). Ex.: âncora=Setembro(9) + Semestral(6 em 6
+// meses) => [Março, Setembro]; âncora=Setembro + Anual => [Setembro].
+function mesesProgramadosEquipamento(eq) {
+  const step = stepMesesPeriodicidade(eq.periodicidade);
+  if (step <= 1) return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  const ancora = eq.mesReferencia || 1;
+  const meses = [];
+  for (let m = ancora; m <= ancora + 12 - step; m += step) {
+    meses.push(((m - 1) % 12) + 1);
+  }
+  return Array.from(new Set(meses)).sort((a, b) => a - b);
+}
+
+// Cor da tag/badge de periodicidade exibida nos blocos do checklist.
+function corPeriodicidadeItem(p) {
+  const v = String(p || "").trim().toLowerCase();
+  if (v === "mensal") return "bg-blue-100 text-blue-700";
+  if (v === "semestral") return "bg-orange-100 text-orange-700";
+  if (v === "anual") return "bg-purple-100 text-purple-700";
+  return "bg-slate-100 text-slate-600";
+}
+
 /* ==========================================================================
    FICHA DE INSPEÇÃO TÉCNICA / LAUDO OPERACIONAL (RSG-6301-01)
    ========================================================================== */
@@ -565,7 +608,10 @@ const LaudoPreventivaModal = {
             <div v-for="(item, idx) in laudo.itens" :key="idx"
               class="flex items-center justify-between gap-2 px-3 py-2 text-sm"
               :class="idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'">
-              <span class="text-slate-700">{{ item.texto }}</span>
+              <div class="min-w-0">
+                <span class="text-slate-700">{{ item.texto }}</span>
+                <span v-if="item.periodicidade" class="text-[10px] font-bold text-slate-400 uppercase tracking-wide ml-1.5">({{ item.periodicidade }})</span>
+              </div>
               <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
                 :class="item.status === 'NC' ? 'bg-red-100 text-red-700' : item.status === 'NA' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
                 {{ formatarStatusItem(item.status) }}
@@ -647,11 +693,12 @@ const PreventivaModule = {
     const loadingDados = ref(false);
     const erroCarregamento = ref("");
 
-    // 'setores' -> 'lista' -> 'detalhe' | 'historico' (aba irmã de 'setores')
+    // 'setores' -> 'lista' -> 'detalhe' | 'historico' | 'calendario' (abas irmãs de 'setores')
     const view = ref("setores");
     const areaSelecionada = ref(null);
     const equipamentoSelecionado = ref(null);
-    const itensChecklist = ref([]); // [{ texto, status }]
+    const itensChecklist = ref([]); // lista plana (todos os blocos): [{ texto, status, periodicidade }]
+    const blocosChecklist = ref([]); // [{ periodicidade, itens: [...] }] — para exibir agrupado
     const descricaoNC = ref("");
     const observacoesGerais = ref("");
     const fotoBase64 = ref(null);
@@ -674,6 +721,12 @@ const PreventivaModule = {
     const filtroPeriodicidade = ref("todas");
     const paginaHistorico = ref(1);
 
+    // Calendário Mestre de Preventivas
+    const ANO_ATUAL = new Date().getFullYear();
+    const calendarioArea = ref("todas");
+    const calendarioAno = ref(ANO_ATUAL);
+    const anosCalendario = [ANO_ATUAL - 1, ANO_ATUAL, ANO_ATUAL + 1];
+
     async function carregarDados(opts) {
       const silencioso = opts && opts.silencioso;
       if (!silencioso) {
@@ -693,6 +746,10 @@ const PreventivaModule = {
           periodicidade: normalizePeriodicidade(
             e.Periodicidade || e.periodicidade || e.Frequencia || e.frequencia || e.Frequência || e.frequência || ""
           ),
+          // Mês-âncora do ciclo (1-12). Sem coluna cadastrada, assume Janeiro
+          // para todos — cadastre "Mes_Referencia" na planilha para escalonar
+          // o calendário de cada equipamento (ex: 9 = Setembro).
+          mesReferencia: parseInt(e.Mes_Referencia || e.mes_referencia || e.MesReferencia || e.mesReferencia, 10) || 1,
           itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
             || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
@@ -742,6 +799,48 @@ const PreventivaModule = {
         }
       });
       return melhor;
+    }
+
+    // Existe log de preventiva deste equipamento dentro do mês/ano informado?
+    // Base do cálculo de status das células do Calendário Mestre.
+    function logNoMes(nome, area, ano, mes) {
+      const nomeAlvo = String(nome || "").trim().toLowerCase();
+      const areaAlvo = String(area || "").trim().toLowerCase();
+      return preventivasHistorico.value.some(p => {
+        if (String(p.equipamento || "").trim().toLowerCase() !== nomeAlvo) return false;
+        if (p.area && areaAlvo && p.area.trim().toLowerCase() !== areaAlvo) return false;
+        const d = new Date(p.data);
+        if (isNaN(d.getTime())) return false;
+        return d.getFullYear() === ano && d.getMonth() + 1 === mes;
+      });
+    }
+
+    // Unificação de múltiplas periodicidades por ativo físico: linhas da
+    // planilha Equipamentos que compartilham o mesmo ID (ou Nome+Área, na
+    // ausência de ID) são agrupadas em um único "ativo" com vários "perfis"
+    // (um por periodicidade cadastrada para aquele equipamento).
+    function chaveAtivo(eq) {
+      return eq.idDisplay
+        ? "id:" + String(eq.idDisplay).trim().toLowerCase()
+        : "nome:" + String(eq.nome).trim().toLowerCase() + "|" + String(eq.area).trim().toLowerCase();
+    }
+    const ativosAgrupados = computed(() => {
+      const grupos = new Map();
+      todosEquipamentos.value.forEach(row => {
+        const chave = chaveAtivo(row);
+        if (!grupos.has(chave)) {
+          grupos.set(chave, {
+            chave, idDisplay: row.idDisplay, nome: row.nome, modelo: row.modelo,
+            tag: row.tag, area: row.area, perfis: [],
+          });
+        }
+        grupos.get(chave).perfis.push(row);
+      });
+      return Array.from(grupos.values());
+    });
+    function ativoDoEquipamento(eq) {
+      const chave = chaveAtivo(eq);
+      return ativosAgrupados.value.find(a => a.chave === chave) || { ...eq, perfis: [eq] };
     }
 
     function formatarStatusLabel(status) {
@@ -823,9 +922,123 @@ const PreventivaModule = {
       view.value = "historico";
     }
 
+    function abrirCalendario() {
+      view.value = "calendario";
+    }
+
+    // ===== Calendário Mestre de Preventivas =====
+    const ativosCalendario = computed(() => {
+      if (calendarioArea.value === "todas") return ativosAgrupados.value;
+      const alvo = calendarioArea.value.trim().toLowerCase();
+      return ativosAgrupados.value.filter(a => a.area.trim().toLowerCase() === alvo);
+    });
+
+    // Status de uma célula (ativo x mês): 'concluido' (log no mês), 'atrasado'
+    // (mês já passou sem log), 'atual' (mês vigente, ainda não realizado) ou
+    // 'futuro' (mês adiante, ainda não chegou).
+    function statusCelula(ativo, mes, ano) {
+      const agora = new Date();
+      const anoAtual = agora.getFullYear();
+      const mesAtual = agora.getMonth() + 1;
+      if (logNoMes(ativo.nome, ativo.area, ano, mes)) return "concluido";
+      const passado = ano < anoAtual || (ano === anoAtual && mes < mesAtual);
+      if (passado) return "atrasado";
+      if (ano === anoAtual && mes === mesAtual) return "atual";
+      return "futuro";
+    }
+
+    const CORES_CELULA = {
+      concluido: "bg-emerald-500 text-white",
+      atrasado: "bg-red-500 text-white",
+      atual: "bg-sky-500 text-white",
+      futuro: "bg-slate-200 text-slate-500",
+    };
+
+    // Perfis do ativo programados para aquele mês (pode ter mais de um, ex:
+    // Mensal + Semestral coincidindo) — usado para renderizar as tags da célula.
+    function perfisNaCelula(ativo, mes) {
+      return ativo.perfis.filter(p => mesesProgramadosEquipamento(p).includes(mes));
+    }
+
+    function linhasCalendarioParaExportar() {
+      return ativosCalendario.value.map(ativo => {
+        const linha = {
+          "ID": ativo.idDisplay || "",
+          "Equipamento": ativo.nome,
+          "Setor": ativo.area,
+        };
+        meses.forEach(m => {
+          const perfis = perfisNaCelula(ativo, m.v);
+          if (perfis.length === 0) {
+            linha[m.l] = "";
+            return;
+          }
+          const st = statusCelula(ativo, m.v, calendarioAno.value);
+          const statusTxt = { concluido: "OK", atrasado: "ATRASADO", atual: "PROGRAMADO", futuro: "FUTURO" }[st];
+          linha[m.l] = perfis.map(p => tagPeriodicidade(p.periodicidade)).join("/") + " (" + statusTxt + ")";
+        });
+        return linha;
+      });
+    }
+
+    function exportarCalendarioExcel() {
+      if (typeof XLSX === "undefined") {
+        pushToast("Biblioteca de exportação (Excel) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      if (ativosCalendario.value.length === 0) {
+        pushToast("Não há equipamentos para exportar com os filtros atuais.", "error");
+        return;
+      }
+      const ws = XLSX.utils.json_to_sheet(linhasCalendarioParaExportar());
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Calendário " + calendarioAno.value);
+      XLSX.writeFile(wb, `calendario-preventivas-${calendarioAno.value}-${Date.now()}.xlsx`);
+    }
+
+    function exportarCalendarioPDF() {
+      if (typeof window.jspdf === "undefined") {
+        pushToast("Biblioteca de exportação (PDF) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      if (ativosCalendario.value.length === 0) {
+        pushToast("Não há equipamentos para exportar com os filtros atuais.", "error");
+        return;
+      }
+      const doc = new window.jspdf.jsPDF({ orientation: "landscape" });
+      doc.setFontSize(13);
+      doc.text(`Calendário Mestre de Preventivas — ${calendarioAno.value}`, 14, 15);
+      const linhas = linhasCalendarioParaExportar();
+      doc.autoTable({
+        startY: 20,
+        styles: { fontSize: 7 },
+        headStyles: { fillColor: [15, 23, 42] },
+        head: [["ID", "Equipamento", "Setor", ...meses.map(m => m.l.slice(0, 3))]],
+        body: linhas.map(l => [l.ID, l.Equipamento, l.Setor, ...meses.map(m => l[m.l])]),
+      });
+      doc.save(`calendario-preventivas-${calendarioAno.value}-${Date.now()}.pdf`);
+    }
+
+    // Abre o checklist do ativo (agrupando todas as periodicidades cadastradas
+    // para o mesmo ID/Nome) e monta um bloco por perfil que esteja programado
+    // para o mês vigente — se Mensal e Semestral coincidirem no mês, as duas
+    // aparecem juntas, em blocos separados, na mesma tela.
     function abrirEquipamento(eq) {
-      equipamentoSelecionado.value = eq;
-      itensChecklist.value = parseItensInspecao(eq.itensInspecao).map(texto => ({ texto, status: null }));
+      const ativo = ativoDoEquipamento(eq);
+      equipamentoSelecionado.value = ativo;
+
+      const mesAtual = new Date().getMonth() + 1;
+      const blocos = [];
+      ativo.perfis.forEach(perfil => {
+        if (!mesesProgramadosEquipamento(perfil).includes(mesAtual)) return;
+        const itens = parseItensInspecao(perfil.itensInspecao).map(texto => ({
+          texto, status: null, periodicidade: perfil.periodicidade,
+        }));
+        if (itens.length) blocos.push({ periodicidade: perfil.periodicidade || "Geral", itens });
+      });
+      blocosChecklist.value = blocos;
+      itensChecklist.value = blocos.flatMap(b => b.itens);
+
       descricaoNC.value = "";
       observacoesGerais.value = "";
       fotoBase64.value = null;
@@ -837,14 +1050,14 @@ const PreventivaModule = {
       view.value = "lista";
       equipamentoSelecionado.value = null;
       itensChecklist.value = [];
+      blocosChecklist.value = [];
       descricaoNC.value = "";
       observacoesGerais.value = "";
       fotoBase64.value = null;
       fotoNome.value = "";
     }
 
-    function setItemStatus(idx, value) {
-      const item = itensChecklist.value[idx];
+    function setItemStatus(item, value) {
       item.status = item.status === value ? null : value;
     }
 
@@ -996,10 +1209,10 @@ const PreventivaModule = {
           equipamentoIdDisplay: equipamentoSelecionado.value.idDisplay,
           equipamentoNome,
           modelo: equipamentoSelecionado.value.modelo,
-          periodicidade: equipamentoSelecionado.value.periodicidade,
+          periodicidade: blocosChecklist.value.map(b => b.periodicidade).filter(Boolean).join(" + "),
           inspetor: usuarioNome,
           statusGeral: statusInspecao,
-          itens: itensChecklist.value.map(i => ({ texto: i.texto, status: i.status })),
+          itens: itensChecklist.value.map(i => ({ texto: i.texto, status: i.status, periodicidade: i.periodicidade })),
           observacoes: observacoesFinal,
           fotoBase64: temNC.value ? foto : null,
         };
@@ -1143,16 +1356,18 @@ const PreventivaModule = {
       areas, meses, periodicidadesCanonicas: PERIODICIDADES_ORDEM, view, areaSelecionada, equipamentoSelecionado,
       loadingDados, erroCarregamento, statsPorArea, equipamentosDaAreaAtual, progressoSetor,
       periodicidadesDaArea, filtroPeriodicidadeLista, equipamentosFiltradosLista,
-      itensChecklist, temNC, progresso,
+      itensChecklist, blocosChecklist, temNC, progresso,
       descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
       inputCameraRef, inputGaleriaRef,
-      abrirArea, voltarSetores, abrirHistorico,
+      abrirArea, voltarSetores, abrirHistorico, abrirCalendario,
       abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
-      ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData,
+      ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData, tagPeriodicidade, corPeriodicidadeItem,
       filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, filtroPeriodicidade, anosDisponiveis,
       historicoFiltrado, historicoPaginado, limparFiltrosHistorico, carregarMaisHistorico,
       periodicidadeDoEquipamento, exportarExcel, exportarPDF,
       laudoAberto, laudoAtual, laudoModoPosSalvar, fecharLaudo, laudoNovaInspecao, laudoIrInicio, abrirLaudoHistorico,
+      calendarioArea, calendarioAno, anosCalendario, ativosCalendario, statusCelula, CORES_CELULA, perfisNaCelula,
+      exportarCalendarioExcel, exportarCalendarioPDF,
     };
   },
   template: `
@@ -1162,7 +1377,7 @@ const PreventivaModule = {
       <button @click="$emit('go-home')" class="hover:text-sky-600 transition-colors btn-tap">Início</button>
       <span>›</span>
       <button @click="voltarSetores" class="hover:text-sky-600 transition-colors btn-tap"
-        :class="(view === 'setores' || view === 'historico') ? 'text-slate-700 font-semibold' : ''">Preventiva</button>
+        :class="(view === 'setores' || view === 'historico' || view === 'calendario') ? 'text-slate-700 font-semibold' : ''">Preventiva</button>
       <template v-if="areaSelecionada && (view === 'lista' || view === 'detalhe')">
         <span>›</span>
         <button @click="abrirArea(areaSelecionada)" class="hover:text-sky-600 transition-colors btn-tap"
@@ -1174,15 +1389,19 @@ const PreventivaModule = {
       </template>
     </nav>
 
-    <!-- Abas de topo: Áreas | Histórico de Inspeções -->
-    <div v-if="view === 'setores' || view === 'historico'" class="flex gap-2">
-      <button @click="voltarSetores" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+    <!-- Abas de topo: Áreas | Histórico de Inspeções | Calendário -->
+    <div v-if="view === 'setores' || view === 'historico' || view === 'calendario'" class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+      <button @click="voltarSetores" class="btn-tap whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-semibold border"
         :class="view === 'setores' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
         Áreas
       </button>
-      <button @click="abrirHistorico" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+      <button @click="abrirHistorico" class="btn-tap whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-semibold border"
         :class="view === 'historico' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
         Histórico de Inspeções
+      </button>
+      <button @click="abrirCalendario" class="btn-tap whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-semibold border"
+        :class="view === 'calendario' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+        📅 Calendário de Preventivas
       </button>
     </div>
 
@@ -1281,6 +1500,70 @@ const PreventivaModule = {
       </template>
     </template>
 
+    <!-- ABA: Calendário Mestre de Preventivas -->
+    <template v-else-if="view === 'calendario'">
+      <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <div class="grid grid-cols-2 gap-2">
+          <select v-model="calendarioArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Setor: Todos</option>
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <select v-model="calendarioAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option v-for="a in anosCalendario" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-emerald-500 inline-block"></span> Concluído</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-red-500 inline-block"></span> Atrasado</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-sky-500 inline-block"></span> Programado (mês atual)</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-slate-200 inline-block"></span> Futuro</span>
+        </div>
+
+        <div class="flex gap-2">
+          <button @click="exportarCalendarioExcel" class="btn-tap text-xs font-semibold px-3 py-1.5 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700">
+            📊 Exportar Excel
+          </button>
+          <button @click="exportarCalendarioPDF" class="btn-tap text-xs font-semibold px-3 py-1.5 rounded-full border border-red-300 bg-red-50 text-red-700">
+            📄 Exportar PDF
+          </button>
+        </div>
+      </div>
+
+      <div v-if="ativosCalendario.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+        Nenhum equipamento encontrado para este filtro.
+      </div>
+
+      <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+        <table class="text-xs border-collapse w-full">
+          <thead>
+            <tr class="bg-slate-800 text-white">
+              <th class="sticky left-0 bg-slate-800 text-left font-bold px-3 py-2 whitespace-nowrap z-10">Equipamento</th>
+              <th v-for="m in meses" :key="m.v" class="font-bold px-1.5 py-2 text-center whitespace-nowrap">{{ m.l.slice(0, 3) }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="ativo in ativosCalendario" :key="ativo.chave" class="border-t border-slate-100">
+              <td class="sticky left-0 bg-white text-left px-3 py-2 whitespace-nowrap font-semibold text-slate-700">
+                <span v-if="ativo.idDisplay" class="text-slate-400 font-mono mr-1">[{{ ativo.idDisplay }}]</span>{{ ativo.nome }}
+              </td>
+              <td v-for="m in meses" :key="m.v" class="px-1 py-2 text-center align-middle">
+                <div v-if="perfisNaCelula(ativo, m.v).length" class="flex flex-wrap items-center justify-center gap-0.5">
+                  <button v-for="(perfil, pIdx) in perfisNaCelula(ativo, m.v)" :key="pIdx" @click="abrirEquipamento(perfil)"
+                    class="btn-tap w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center"
+                    :class="CORES_CELULA[statusCelula(ativo, m.v, calendarioAno)]"
+                    :title="perfil.periodicidade">
+                    {{ tagPeriodicidade(perfil.periodicidade) }}
+                  </button>
+                </div>
+                <span v-else class="text-slate-300">–</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+
     <!-- NÍVEL 2: execução do checklist do equipamento -->
     <template v-else-if="view === 'detalhe' && equipamentoSelecionado">
       <button @click="voltarLista" class="btn-tap flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-sky-600">
@@ -1308,31 +1591,37 @@ const PreventivaModule = {
         </div>
       </div>
 
-      <div v-if="itensChecklist.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-        Nenhum item de inspeção cadastrado para este equipamento.
+      <div v-if="blocosChecklist.length === 0" class="bg-emerald-50 border border-emerald-200 rounded-xl p-6 text-center text-emerald-700 font-semibold">
+        ✓ Nada programado para este equipamento no mês vigente.
       </div>
 
       <div v-else class="space-y-3">
-        <div v-for="(item, idx) in itensChecklist" :key="idx" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="font-semibold text-slate-800 mb-3">{{ item.texto }}</p>
-          <div class="grid grid-cols-3 gap-2">
-            <button @click="setItemStatus(idx, 'C')"
-              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-              :class="item.status === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
-              ✓ C
-            </button>
-            <button @click="setItemStatus(idx, 'NC')"
-              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-              :class="item.status === 'NC' ? 'bg-red-500 border-red-500 text-white' : 'bg-red-50 border-red-200 text-red-700'">
-              ✗ NC
-            </button>
-            <button @click="setItemStatus(idx, 'NA')"
-              class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
-              :class="item.status === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-600'">
-              - NA
-            </button>
+        <template v-for="bloco in blocosChecklist" :key="bloco.periodicidade">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="corPeriodicidadeItem(bloco.periodicidade)">{{ bloco.periodicidade }}</span>
+            Rotina {{ bloco.periodicidade }}
+          </h4>
+          <div v-for="(item, itemIdx) in bloco.itens" :key="bloco.periodicidade + '-' + itemIdx" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+            <p class="font-semibold text-slate-800 mb-3">{{ item.texto }}</p>
+            <div class="grid grid-cols-3 gap-2">
+              <button @click="setItemStatus(item, 'C')"
+                class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+                :class="item.status === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
+                ✓ C
+              </button>
+              <button @click="setItemStatus(item, 'NC')"
+                class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+                :class="item.status === 'NC' ? 'bg-red-500 border-red-500 text-white' : 'bg-red-50 border-red-200 text-red-700'">
+                ✗ NC
+              </button>
+              <button @click="setItemStatus(item, 'NA')"
+                class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
+                :class="item.status === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-600'">
+                - NA
+              </button>
+            </div>
           </div>
-        </div>
+        </template>
 
         <div v-if="temNC" class="bg-red-50 border-2 border-red-200 rounded-xl p-4 space-y-3">
           <p class="font-bold text-red-700 flex items-center gap-1.5">⚠️ Não Conformidade Detectada</p>
