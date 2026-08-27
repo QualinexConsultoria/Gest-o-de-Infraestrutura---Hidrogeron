@@ -6,6 +6,9 @@
 <title>Hidrogeron | Gestão de Manutenção</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -409,6 +412,30 @@ const MESES_PT = [
 ];
 const HISTORICO_POR_PAGINA = 20;
 
+// Periodicidades industriais suportadas e sua janela de validade em dias.
+const PERIODICIDADES_ORDEM = ["Diária", "Semanal", "Quinzenal", "Mensal", "Bimestral", "Trimestral", "Semestral", "Anual"];
+const PERIODICIDADE_DIAS = {
+  "diária": 1, "diaria": 1,
+  "semanal": 7,
+  "quinzenal": 15,
+  "mensal": 30,
+  "bimestral": 60,
+  "trimestral": 90,
+  "semestral": 180,
+  "anual": 365,
+};
+
+function normalizePeriodicidade(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  const encontrada = PERIODICIDADES_ORDEM.find(p => p.toLowerCase() === v);
+  return encontrada || String(raw || "").trim();
+}
+
+function diasPeriodicidade(periodicidade) {
+  const v = String(periodicidade || "").trim().toLowerCase();
+  return PERIODICIDADE_DIAS[v] || null;
+}
+
 const PreventivaModule = {
   props: { user: Object },
   emits: ["go-home"],
@@ -440,6 +467,7 @@ const PreventivaModule = {
     const filtroArea = ref("todas");
     const filtroBusca = ref("");
     const filtroStatus = ref("todos"); // 'todos' | 'C' | 'NC'
+    const filtroPeriodicidade = ref("todas");
     const paginaHistorico = ref(1);
 
     async function carregarDados(opts) {
@@ -458,6 +486,9 @@ const PreventivaModule = {
           modelo: e.Modelo || e.modelo || "",
           tag: e.TAG || e.Tag || e.tag || "",
           area: e.Area || e.area || "",
+          periodicidade: normalizePeriodicidade(
+            e.Periodicidade || e.periodicidade || e.Frequencia || e.frequencia || e.Frequência || e.frequência || ""
+          ),
           itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
             || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
@@ -476,6 +507,20 @@ const PreventivaModule = {
     }
 
     const equipamentosDaAreaAtual = computed(() => equipamentosDaArea(areaSelecionada.value));
+
+    // Abas de periodicidade geradas dinamicamente a partir dos ativos da área.
+    const filtroPeriodicidadeLista = ref("todas");
+    const periodicidadesDaArea = computed(() => {
+      const presentes = new Set(equipamentosDaAreaAtual.value.map(eq => eq.periodicidade).filter(Boolean));
+      const ordenadas = PERIODICIDADES_ORDEM.filter(p => presentes.has(p));
+      const extras = Array.from(presentes).filter(p => !PERIODICIDADES_ORDEM.includes(p));
+      return ordenadas.concat(extras);
+    });
+    const equipamentosFiltradosLista = computed(() => {
+      if (filtroPeriodicidadeLista.value === "todas") return equipamentosDaAreaAtual.value;
+      return equipamentosDaAreaAtual.value.filter(eq => eq.periodicidade === filtroPeriodicidadeLista.value);
+    });
+    watch(areaSelecionada, () => { filtroPeriodicidadeLista.value = "todas"; });
 
     // O log de preventivas não traz o ID do equipamento, então o casamento
     // é feito por nome do equipamento + área do próprio equipamento.
@@ -502,44 +547,54 @@ const PreventivaModule = {
       return "—";
     }
 
-    // Selo do card: "Pendente" fora do ciclo (7 dias), "Realizado Hoje"/"Inspecionado"
-    // se em dia, ou destaque de Não Conformidade mesmo dentro do ciclo (segurança).
+    // Selo do card: janela de validade calculada dinamicamente a partir da
+    // periodicidade do próprio equipamento (Diária=1d ... Anual=365d).
+    // Sem periodicidade definida, cai no padrão Mensal (30d).
     function statusCicloEquipamento(eq) {
       const info = ultimaInspecao(eq);
-      if (!info) return { label: "Pendente", badge: "bg-amber-100 text-amber-700 border border-amber-200" };
+      const vencido = { label: "✗ Pendente/Vencido", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "vencido" };
 
-      const agora = new Date();
-      const inicioHoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
-      const seteDiasAtras = new Date(agora.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-      if (info.dataObj < seteDiasAtras) {
-        return { label: "Pendente", badge: "bg-amber-100 text-amber-700 border border-amber-200" };
-      }
+      if (!info) return vencido;
       if (info.status === "NC") {
-        return { label: "⚠ Não Conforme", badge: "bg-red-100 text-red-700 border border-red-200" };
+        return { label: "⚠ Não Conforme", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "nc" };
       }
-      return {
-        label: info.dataObj >= inicioHoje ? "✓ Realizado Hoje" : "✓ Inspecionado",
-        badge: "bg-emerald-100 text-emerald-700 border border-emerald-200",
-      };
+
+      const diasJanela = diasPeriodicidade(eq.periodicidade) || 30;
+      const dataLimite = new Date(info.dataObj.getTime() + diasJanela * 24 * 60 * 60 * 1000);
+      const diasRestantes = (dataLimite.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+
+      if (diasRestantes <= 0) return vencido;
+
+      const limiarAlerta = Math.max(1, diasJanela * 0.2);
+      if (diasRestantes <= limiarAlerta) {
+        return { label: "⚠ Próximo do vencimento", badge: "bg-amber-100 text-amber-700 border border-amber-200", tipo: "alerta" };
+      }
+      return { label: "✓ Em dia", badge: "bg-emerald-100 text-emerald-700 border border-emerald-200", tipo: "em_dia" };
     }
 
-    // Cards do nível "Setores": total de equipamentos e pendências por área.
+    // Cards do nível "Setores": total de equipamentos e pendências por área
+    // (vencidos ou não conformes contam como pendência que exige ação).
     const statsPorArea = computed(() => {
       return areas.map(a => {
         const lista = equipamentosDaArea(a);
-        const pendentes = lista.filter(eq => statusCicloEquipamento(eq).label === "Pendente").length;
+        const pendentes = lista.filter(eq => {
+          const tipo = statusCicloEquipamento(eq).tipo;
+          return tipo === "vencido" || tipo === "nc";
+        }).length;
         return { area: a, total: lista.length, pendentes };
       });
     });
 
-    // Progresso do setor selecionado: quantos equipamentos já estão em dia
-    // (inspecionados no ciclo dos últimos 7 dias) vs. o total da área.
+    // Progresso do setor selecionado: quantos equipamentos NÃO estão pendentes
+    // (vencidos ou NC) vs. o total da área.
     const progressoSetor = computed(() => {
       const lista = equipamentosDaAreaAtual.value;
       const total = lista.length;
       if (total === 0) return { feitos: 0, total: 0, pct: 0 };
-      const feitos = lista.filter(eq => statusCicloEquipamento(eq).label !== "Pendente").length;
+      const feitos = lista.filter(eq => {
+        const tipo = statusCicloEquipamento(eq).tipo;
+        return tipo !== "vencido" && tipo !== "nc";
+      }).length;
       return { feitos, total, pct: Math.round((feitos / total) * 100) };
     });
 
@@ -708,6 +763,17 @@ const PreventivaModule = {
       return Array.from(anos).sort((a, b) => b - a);
     });
 
+    // O log de inspeção não guarda a periodicidade do equipamento; buscamos
+    // no cadastro atual por nome + área (mesmo casamento usado em ultimaInspecao).
+    function periodicidadeDoEquipamento(nomeEquip, area) {
+      const nomeAlvo = String(nomeEquip || "").trim().toLowerCase();
+      const areaAlvo = String(area || "").trim().toLowerCase();
+      const eq = todosEquipamentos.value.find(e =>
+        e.nome.trim().toLowerCase() === nomeAlvo && (!areaAlvo || e.area.trim().toLowerCase() === areaAlvo)
+      );
+      return eq ? eq.periodicidade : "";
+    }
+
     const historicoFiltrado = computed(() => {
       const termo = filtroBusca.value.trim().toLowerCase();
       return preventivasHistorico.value.filter(p => {
@@ -722,6 +788,9 @@ const PreventivaModule = {
           if (String(p.area || "").trim().toLowerCase() !== filtroArea.value.trim().toLowerCase()) return false;
         }
         if (filtroStatus.value !== "todos" && p.status !== filtroStatus.value) return false;
+        if (filtroPeriodicidade.value !== "todas") {
+          if (periodicidadeDoEquipamento(p.equipamento, p.area) !== filtroPeriodicidade.value) return false;
+        }
         if (termo) {
           const alvo = `${p.equipamento || ""} ${p.id || ""}`.toLowerCase();
           if (!alvo.includes(termo)) return false;
@@ -732,7 +801,7 @@ const PreventivaModule = {
 
     const historicoPaginado = computed(() => historicoFiltrado.value.slice(0, paginaHistorico.value * HISTORICO_POR_PAGINA));
 
-    watch([filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus], () => {
+    watch([filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, filtroPeriodicidade], () => {
       paginaHistorico.value = 1;
     });
 
@@ -742,6 +811,7 @@ const PreventivaModule = {
       filtroArea.value = "todas";
       filtroBusca.value = "";
       filtroStatus.value = "todos";
+      filtroPeriodicidade.value = "todas";
       paginaHistorico.value = 1;
     }
 
@@ -749,19 +819,75 @@ const PreventivaModule = {
       paginaHistorico.value += 1;
     }
 
+    function linhasParaExportar() {
+      return historicoFiltrado.value.map(h => ({
+        "Data/Hora": formatarData(h.data),
+        "Setor": h.area || "",
+        "ID": h.id || "",
+        "Equipamento": h.equipamento || "",
+        "Periodicidade": periodicidadeDoEquipamento(h.equipamento, h.area) || "-",
+        "Status": formatarStatusLabel(h.status),
+        "Usuário": h.usuario || "",
+        "Observações": h.observacoes || "",
+      }));
+    }
+
+    function exportarExcel() {
+      if (typeof XLSX === "undefined") {
+        pushToast("Biblioteca de exportação (Excel) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      if (historicoFiltrado.value.length === 0) {
+        pushToast("Não há registros para exportar com os filtros atuais.", "error");
+        return;
+      }
+      const ws = XLSX.utils.json_to_sheet(linhasParaExportar());
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Histórico");
+      XLSX.writeFile(wb, `historico-preventivas-${Date.now()}.xlsx`);
+    }
+
+    function exportarPDF() {
+      if (typeof window.jspdf === "undefined") {
+        pushToast("Biblioteca de exportação (PDF) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      if (historicoFiltrado.value.length === 0) {
+        pushToast("Não há registros para exportar com os filtros atuais.", "error");
+        return;
+      }
+      const doc = new window.jspdf.jsPDF({ orientation: "landscape" });
+      doc.setFontSize(13);
+      doc.text("Histórico de Inspeções — Manutenção Preventiva", 14, 15);
+      doc.autoTable({
+        startY: 20,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [15, 23, 42] },
+        head: [["Data/Hora", "Setor", "ID", "Equipamento", "Periodicidade", "Status", "Usuário", "Observações"]],
+        body: historicoFiltrado.value.map(h => [
+          formatarData(h.data), h.area || "", h.id || "", h.equipamento || "",
+          periodicidadeDoEquipamento(h.equipamento, h.area) || "-",
+          formatarStatusLabel(h.status), h.usuario || "", h.observacoes || "",
+        ]),
+      });
+      doc.save(`historico-preventivas-${Date.now()}.pdf`);
+    }
+
     onMounted(carregarDados);
 
     return {
-      areas, meses, view, areaSelecionada, equipamentoSelecionado,
+      areas, meses, periodicidadesCanonicas: PERIODICIDADES_ORDEM, view, areaSelecionada, equipamentoSelecionado,
       loadingDados, erroCarregamento, statsPorArea, equipamentosDaAreaAtual, progressoSetor,
+      periodicidadesDaArea, filtroPeriodicidadeLista, equipamentosFiltradosLista,
       itensChecklist, temNC, progresso,
       descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
       inputCameraRef, inputGaleriaRef,
       abrirArea, voltarSetores, abrirHistorico,
       abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
       ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData,
-      filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, anosDisponiveis,
+      filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, filtroPeriodicidade, anosDisponiveis,
       historicoFiltrado, historicoPaginado, limparFiltrosHistorico, carregarMaisHistorico,
+      periodicidadeDoEquipamento, exportarExcel, exportarPDF,
     };
   },
   template: `
@@ -842,7 +968,7 @@ const PreventivaModule = {
       <template v-else>
         <div class="bg-white rounded-xl border border-slate-200 p-4">
           <div class="flex justify-between text-xs font-semibold text-slate-500 mb-1">
-            <span>Progresso do setor (últimos 7 dias)</span>
+            <span>Progresso do setor</span>
             <span>{{ progressoSetor.feitos }}/{{ progressoSetor.total }}</span>
           </div>
           <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -850,14 +976,34 @@ const PreventivaModule = {
           </div>
         </div>
 
-        <div class="space-y-3">
-          <button v-for="eq in equipamentosDaAreaAtual" :key="eq.id" @click="abrirEquipamento(eq)"
+        <div v-if="periodicidadesDaArea.length" class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button @click="filtroPeriodicidadeLista = 'todas'"
+            class="btn-tap whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors"
+            :class="filtroPeriodicidadeLista === 'todas' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            Todas
+          </button>
+          <button v-for="p in periodicidadesDaArea" :key="p" @click="filtroPeriodicidadeLista = p"
+            class="btn-tap whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors"
+            :class="filtroPeriodicidadeLista === p ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            {{ p }}
+          </button>
+        </div>
+
+        <div v-if="equipamentosFiltradosLista.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum equipamento com essa periodicidade nesta área.
+        </div>
+
+        <div v-else class="space-y-3">
+          <button v-for="eq in equipamentosFiltradosLista" :key="eq.id" @click="abrirEquipamento(eq)"
             class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
             <div class="min-w-0">
               <p class="font-semibold text-slate-800 truncate">
                 <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
               </p>
-              <p class="text-xs text-slate-400 mt-0.5 truncate">
+              <p v-if="eq.periodicidade" class="mt-1">
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 uppercase tracking-wide">{{ eq.periodicidade }}</span>
+              </p>
+              <p class="text-xs text-slate-400 mt-1 truncate">
                 <template v-if="ultimaInspecao(eq)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq).status) }} · {{ formatarData(ultimaInspecao(eq).dataObj) }}</template>
                 <template v-else>Sem inspeção registrada</template>
               </p>
@@ -972,7 +1118,7 @@ const PreventivaModule = {
     <!-- ABA: Histórico de Inspeções -->
     <template v-else-if="view === 'historico'">
       <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
             <option value="todos">Ano: Todos</option>
             <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
@@ -984,6 +1130,10 @@ const PreventivaModule = {
           <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
             <option value="todas">Setor: Todos</option>
             <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <select v-model="filtroPeriodicidade" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Periodicidade: Todas</option>
+            <option v-for="p in periodicidadesCanonicas" :key="p" :value="p">{{ p }}</option>
           </select>
         </div>
 
@@ -999,7 +1149,17 @@ const PreventivaModule = {
           </button>
         </div>
 
-        <button @click="limparFiltrosHistorico" class="text-sky-600 text-xs font-semibold btn-tap">✕ Limpar Filtros</button>
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <button @click="limparFiltrosHistorico" class="text-sky-600 text-xs font-semibold btn-tap">✕ Limpar Filtros</button>
+          <div class="flex gap-2">
+            <button @click="exportarExcel" class="btn-tap text-xs font-semibold px-3 py-1.5 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700">
+              📊 Exportar Excel
+            </button>
+            <button @click="exportarPDF" class="btn-tap text-xs font-semibold px-3 py-1.5 rounded-full border border-red-300 bg-red-50 text-red-700">
+              📄 Exportar PDF
+            </button>
+          </div>
+        </div>
       </div>
 
       <p class="text-xs text-slate-400">{{ historicoFiltrado.length }} registro(s) encontrado(s)</p>
@@ -1013,7 +1173,7 @@ const PreventivaModule = {
           <div class="flex items-start justify-between gap-2 mb-1">
             <div class="min-w-0">
               <p class="font-semibold text-slate-800 truncate">{{ h.equipamento || 'Equipamento' }}</p>
-              <p class="text-xs text-slate-400 truncate">{{ h.area }} · #{{ h.id }}</p>
+              <p class="text-xs text-slate-400 truncate">{{ h.area }} · #{{ h.id }}<template v-if="periodicidadeDoEquipamento(h.equipamento, h.area)"> · {{ periodicidadeDoEquipamento(h.equipamento, h.area) }}</template></p>
             </div>
             <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
               :class="h.status === 'NC' ? 'bg-red-100 text-red-700' : h.status === 'NA' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
