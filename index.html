@@ -767,19 +767,28 @@ const PreventivaModule = {
       return todosEquipamentos.value.filter(e => e.area.trim().toLowerCase() === alvo);
     }
 
-    const equipamentosDaAreaAtual = computed(() => equipamentosDaArea(areaSelecionada.value));
+    // Lista do setor: um card por ATIVO físico (linhas de mesmo ID/Nome já
+    // unificadas), não mais um card por linha/periodicidade cadastrada.
+    function ativosDaArea(area) {
+      const alvo = String(area || "").trim().toLowerCase();
+      return ativosAgrupados.value.filter(a => a.area.trim().toLowerCase() === alvo);
+    }
+    const equipamentosDaAreaAtual = computed(() => ativosDaArea(areaSelecionada.value));
 
-    // Abas de periodicidade geradas dinamicamente a partir dos ativos da área.
+    // Abas de periodicidade geradas dinamicamente a partir de TODOS os perfis
+    // (linhas) dos ativos da área — um ativo com Mensal+Semestral aparece nas
+    // duas abas.
     const filtroPeriodicidadeLista = ref("todas");
     const periodicidadesDaArea = computed(() => {
-      const presentes = new Set(equipamentosDaAreaAtual.value.map(eq => eq.periodicidade).filter(Boolean));
+      const presentes = new Set();
+      equipamentosDaAreaAtual.value.forEach(ativo => ativo.perfis.forEach(p => { if (p.periodicidade) presentes.add(p.periodicidade); }));
       const ordenadas = PERIODICIDADES_ORDEM.filter(p => presentes.has(p));
       const extras = Array.from(presentes).filter(p => !PERIODICIDADES_ORDEM.includes(p));
       return ordenadas.concat(extras);
     });
     const equipamentosFiltradosLista = computed(() => {
       if (filtroPeriodicidadeLista.value === "todas") return equipamentosDaAreaAtual.value;
-      return equipamentosDaAreaAtual.value.filter(eq => eq.periodicidade === filtroPeriodicidadeLista.value);
+      return equipamentosDaAreaAtual.value.filter(ativo => ativo.perfis.some(p => p.periodicidade === filtroPeriodicidadeLista.value));
     });
     watch(areaSelecionada, () => { filtroPeriodicidadeLista.value = "todas"; });
 
@@ -850,38 +859,46 @@ const PreventivaModule = {
       return "—";
     }
 
-    // Selo do card: janela de validade calculada dinamicamente a partir da
-    // periodicidade do próprio equipamento (Diária=1d ... Anual=365d).
-    // Sem periodicidade definida, cai no padrão Mensal (30d).
-    function statusCicloEquipamento(eq) {
-      const info = ultimaInspecao(eq);
-      const vencido = { label: "✗ Pendente/Vencido", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "vencido" };
-
-      if (!info) return vencido;
-      if (info.status === "NC") {
+    // Selo do card do ativo: considera TODOS os perfis (periodicidades)
+    // cadastrados para aquele ID/Nome, usando o mesmo motor de agendamento
+    // mensal do Calendário Mestre (mês-âncora + "existe log naquele mês?").
+    // Um único log do equipamento dá baixa em qualquer perfil programado
+    // para o mês em que ele foi lançado.
+    function statusCicloEquipamento(ativo) {
+      const info = ultimaInspecao(ativo);
+      if (info && info.status === "NC") {
         return { label: "⚠ Não Conforme", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "nc" };
       }
 
-      const diasJanela = diasPeriodicidade(eq.periodicidade) || 30;
-      const dataLimite = new Date(info.dataObj.getTime() + diasJanela * 24 * 60 * 60 * 1000);
-      const diasRestantes = (dataLimite.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+      const agora = new Date();
+      const anoAtual = agora.getFullYear();
+      const mesAtual = agora.getMonth() + 1;
+      const perfis = ativo.perfis || [ativo];
 
-      if (diasRestantes <= 0) return vencido;
+      let atrasado = false;
+      let pendenteEsteMes = false;
+      perfis.forEach(perfil => {
+        mesesProgramadosEquipamento(perfil).forEach(mes => {
+          if (mes > mesAtual) return;
+          if (!logNoMes(ativo.nome, ativo.area, anoAtual, mes)) {
+            if (mes === mesAtual) pendenteEsteMes = true;
+            else atrasado = true;
+          }
+        });
+      });
 
-      const limiarAlerta = Math.max(1, diasJanela * 0.2);
-      if (diasRestantes <= limiarAlerta) {
-        return { label: "⚠ Próximo do vencimento", badge: "bg-amber-100 text-amber-700 border border-amber-200", tipo: "alerta" };
-      }
+      if (atrasado) return { label: "✗ Pendente/Vencido", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "vencido" };
+      if (pendenteEsteMes) return { label: "⚠ Pendente no Mês", badge: "bg-amber-100 text-amber-700 border border-amber-200", tipo: "alerta" };
       return { label: "✓ Em dia", badge: "bg-emerald-100 text-emerald-700 border border-emerald-200", tipo: "em_dia" };
     }
 
-    // Cards do nível "Setores": total de equipamentos e pendências por área
-    // (vencidos ou não conformes contam como pendência que exige ação).
+    // Cards do nível "Setores": total de ATIVOS (já unificados) e pendências
+    // por área (vencidos ou não conformes contam como pendência que exige ação).
     const statsPorArea = computed(() => {
       return areas.map(a => {
-        const lista = equipamentosDaArea(a);
-        const pendentes = lista.filter(eq => {
-          const tipo = statusCicloEquipamento(eq).tipo;
+        const lista = ativosDaArea(a);
+        const pendentes = lista.filter(ativo => {
+          const tipo = statusCicloEquipamento(ativo).tipo;
           return tipo === "vencido" || tipo === "nc";
         }).length;
         return { area: a, total: lista.length, pendentes };
@@ -906,6 +923,13 @@ const PreventivaModule = {
       const dt = d instanceof Date ? d : new Date(d);
       if (isNaN(dt.getTime())) return String(d);
       return dt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    // Título do bloco no checklist consolidado: "Rotina Mensal" para o ciclo
+    // curto, "Revisão {Periodicidade}" para os ciclos mais espaçados.
+    function tituloBloco(periodicidade) {
+      if (String(periodicidade || "").trim().toLowerCase() === "mensal") return "Rotina Mensal";
+      return periodicidade ? "Revisão " + periodicidade : "Rotina Geral";
     }
 
     function abrirArea(area) {
@@ -1361,7 +1385,7 @@ const PreventivaModule = {
       inputCameraRef, inputGaleriaRef,
       abrirArea, voltarSetores, abrirHistorico, abrirCalendario,
       abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
-      ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData, tagPeriodicidade, corPeriodicidadeItem,
+      ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData, tagPeriodicidade, corPeriodicidadeItem, tituloBloco,
       filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, filtroPeriodicidade, anosDisponiveis,
       historicoFiltrado, historicoPaginado, limparFiltrosHistorico, carregarMaisHistorico,
       periodicidadeDoEquipamento, exportarExcel, exportarPDF,
@@ -1478,14 +1502,14 @@ const PreventivaModule = {
         </div>
 
         <div v-else class="space-y-3">
-          <button v-for="eq in equipamentosFiltradosLista" :key="eq.id" @click="abrirEquipamento(eq)"
+          <button v-for="eq in equipamentosFiltradosLista" :key="eq.chave" @click="abrirEquipamento(eq)"
             class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
             <div class="min-w-0">
               <p class="font-semibold text-slate-800 truncate">
                 <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
               </p>
-              <p v-if="eq.periodicidade" class="mt-1">
-                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 uppercase tracking-wide">{{ eq.periodicidade }}</span>
+              <p v-if="eq.perfis && eq.perfis.length" class="flex flex-wrap gap-1 mt-1">
+                <span v-for="perfil in eq.perfis" :key="perfil.id" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 uppercase tracking-wide">{{ perfil.periodicidade || 'Sem periodicidade' }}</span>
               </p>
               <p class="text-xs text-slate-400 mt-1 truncate">
                 <template v-if="ultimaInspecao(eq)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq).status) }} · {{ formatarData(ultimaInspecao(eq).dataObj) }}</template>
@@ -1599,7 +1623,7 @@ const PreventivaModule = {
         <template v-for="bloco in blocosChecklist" :key="bloco.periodicidade">
           <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
             <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="corPeriodicidadeItem(bloco.periodicidade)">{{ bloco.periodicidade }}</span>
-            Rotina {{ bloco.periodicidade }}
+            {{ tituloBloco(bloco.periodicidade) }}
           </h4>
           <div v-for="(item, itemIdx) in bloco.itens" :key="bloco.periodicidade + '-' + itemIdx" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
             <p class="font-semibold text-slate-800 mb-3">{{ item.texto }}</p>
