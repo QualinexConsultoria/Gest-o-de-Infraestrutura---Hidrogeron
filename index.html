@@ -81,19 +81,30 @@ async function apiGet(params) {
 }
 
 // Chamada explícita usada para autenticação e carga inicial de dados.
+// GET simples (sem headers customizados) + cache: "no-store" + _t de
+// quebra de cache: nunca deve disparar preflight nem voltar uma resposta
+// antiga em cache do navegador.
 async function getInitialData() {
-  let res;
+  const url = `${API_URL}?action=getInitialData&_t=${Date.now()}`;
+  let response;
   try {
-    res = await fetch(`${API_URL}?action=getInitialData&_t=${Date.now()}`, {
+    response = await fetch(url, {
       method: "GET",
-      redirect: "follow",
       cache: "no-store",
     });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no getInitialData:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
   }
-  const data = await handleApiResponse(res);
+  if (!response.ok) {
+    throw new Error("Erro na resposta da rede (HTTP " + response.status + ")");
+  }
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error("Resposta inválida do servidor (não é um JSON válido).");
+  }
   console.log("Dados Carregados:", data);
   return data;
 }
