@@ -223,6 +223,7 @@ function normalizePreventivaLog(p) {
     data: p.Data_Hora || p.data_hora || p.Data || p.data || "",
     area: p.Area || p.area || "",
     equipamento: p.Equipamento || p.equipamento || "",
+    idEquipamento: p.ID_Equipamento || p.Id_Equipamento || p.id_equipamento || "",
     usuario: p.Usuario || p.usuario || "",
     status: normalizeStatusInspecao(p.Status_Inspecao || p.status_inspecao || p.Status || p.status || ""),
     observacoes: p.Observacoes || p.observacoes || p.Obs || "",
@@ -403,7 +404,7 @@ const LoginScreen = {
    ========================================================================== */
 function parseItensInspecao(str) {
   return String(str || "")
-    .split(/[,\n]+/)
+    .split(/[,;\n]+/)
     .map(s => s.trim())
     .filter(Boolean);
 }
@@ -489,6 +490,13 @@ function getThirdThursday(year, monthIndex) {
   const offsetPrimeiraQuinta = (4 - primeiroDia.getDay() + 7) % 7; // quinta-feira = 4
   const primeiraQuinta = 1 + offsetPrimeiraQuinta;
   return new Date(year, monthIndex, primeiraQuinta + 14);
+}
+
+// Normaliza texto para comparação robusta (minúsculo, sem acento, sem
+// espaços nas pontas) — usado no casamento de equipamento por nome ao
+// reconstituir laudos de registros do Histórico.
+function normalizarTexto(s) {
+  return String(s || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function formatarDataCurta(d) {
@@ -840,11 +848,11 @@ const PreventivaModule = {
     // é feito por nome do equipamento + área do próprio equipamento.
     function ultimaInspecao(eq) {
       let melhor = null;
-      const nomeAlvo = String(eq.nome || "").trim().toLowerCase();
+      const nomeAlvo = normalizarTexto(eq.nome);
       preventivasHistorico.value.forEach(p => {
-        const nomeLog = String(p.equipamento || "").trim().toLowerCase();
+        const nomeLog = normalizarTexto(p.equipamento);
         if (!nomeLog || nomeLog !== nomeAlvo) return;
-        if (p.area && eq.area && p.area.trim().toLowerCase() !== eq.area.trim().toLowerCase()) return;
+        if (p.area && eq.area && normalizarTexto(p.area) !== normalizarTexto(eq.area)) return;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return;
         if (!melhor || d > melhor.dataObj) {
@@ -857,11 +865,11 @@ const PreventivaModule = {
     // Existe log de preventiva deste equipamento dentro do mês/ano informado?
     // Base do cálculo de status das células do Calendário Mestre.
     function logNoMes(nome, area, ano, mes) {
-      const nomeAlvo = String(nome || "").trim().toLowerCase();
-      const areaAlvo = String(area || "").trim().toLowerCase();
+      const nomeAlvo = normalizarTexto(nome);
+      const areaAlvo = normalizarTexto(area);
       return preventivasHistorico.value.some(p => {
-        if (String(p.equipamento || "").trim().toLowerCase() !== nomeAlvo) return false;
-        if (p.area && areaAlvo && p.area.trim().toLowerCase() !== areaAlvo) return false;
+        if (normalizarTexto(p.equipamento) !== nomeAlvo) return false;
+        if (p.area && areaAlvo && normalizarTexto(p.area) !== areaAlvo) return false;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return false;
         return d.getFullYear() === ano && d.getMonth() + 1 === mes;
@@ -896,14 +904,21 @@ const PreventivaModule = {
       return ativosAgrupados.value.find(a => a.chave === chave) || { ...eq, perfis: [eq] };
     }
 
-    // Casamento do mesmo tipo usado em ultimaInspecao/logNoMes (nome + área do
-    // log), mas devolvendo o ativo já agrupado — usado para reconstituir a
-    // Matriz de Verificação de registros do Histórico.
-    function ativoPorNomeArea(nome, area) {
-      const nomeAlvo = String(nome || "").trim().toLowerCase();
-      const areaAlvo = String(area || "").trim().toLowerCase();
+    // Localiza o ativo (já agrupado) de um registro do Histórico para
+    // reconstituir a Matriz de Inspeção do laudo. Prioridade: 1) ID do
+    // equipamento, quando o log traz um; 2) nome + área, com comparação
+    // robusta a maiúsculas/acentuação (normalizarTexto) — cobre variações
+    // de digitação entre o cadastro e o log salvo.
+    function ativoPorNomeArea(nome, area, idEquipamento) {
+      const idAlvo = normalizarTexto(idEquipamento);
+      if (idAlvo) {
+        const porId = ativosAgrupados.value.find(a => normalizarTexto(a.idDisplay) === idAlvo);
+        if (porId) return porId;
+      }
+      const nomeAlvo = normalizarTexto(nome);
+      const areaAlvo = normalizarTexto(area);
       return ativosAgrupados.value.find(a =>
-        a.nome.trim().toLowerCase() === nomeAlvo && (!areaAlvo || a.area.trim().toLowerCase() === areaAlvo)
+        normalizarTexto(a.nome) === nomeAlvo && (!areaAlvo || normalizarTexto(a.area) === areaAlvo)
       );
     }
 
@@ -915,10 +930,9 @@ const PreventivaModule = {
     // observações quais itens específicos foram apontados — o restante é
     // preenchido como Conforme.
     function montarItensLaudoHistorico(ativo, statusGeral, observacoes) {
-      if (!ativo) return [];
       const vistos = new Set();
       const itens = [];
-      (ativo.perfis || []).forEach(perfil => {
+      (ativo && ativo.perfis || []).forEach(perfil => {
         parseItensInspecao(perfil.itensInspecao).forEach(texto => {
           const chave = texto.trim().toLowerCase();
           if (vistos.has(chave)) return;
@@ -931,6 +945,16 @@ const PreventivaModule = {
           });
         });
       });
+      // Fallback de emergência: sem ativo cadastrado ou sem itens recomendados
+      // no cadastro, a Matriz de Inspeção nunca pode ficar vazia/oculta.
+      if (itens.length === 0) {
+        const periodicidadeFallback = ativo && ativo.perfis && ativo.perfis[0] ? ativo.perfis[0].periodicidade : "";
+        itens.push({
+          texto: "Inspeção Operacional e Integridade Estrutural",
+          periodicidade: periodicidadeFallback, status: "C",
+          observacao: "Conforme padrão operacional", fotoBase64: null,
+        });
+      }
       if (statusGeral === "NC") {
         const obsAlvo = String(observacoes || "").trim().toLowerCase();
         let algumApontado = false;
@@ -1213,7 +1237,7 @@ const PreventivaModule = {
     // reconstituída a partir dos itens cadastrados no ativo (ver
     // montarItensLaudoHistorico).
     function abrirLaudoHistorico(h) {
-      const ativo = ativoPorNomeArea(h.equipamento, h.area);
+      const ativo = ativoPorNomeArea(h.equipamento, h.area, h.idEquipamento);
       laudoAtual.value = {
         idLog: h.id,
         dataHora: h.data,
@@ -1400,10 +1424,10 @@ const PreventivaModule = {
     // O log de inspeção não guarda a periodicidade do equipamento; buscamos
     // no cadastro atual por nome + área (mesmo casamento usado em ultimaInspecao).
     function periodicidadeDoEquipamento(nomeEquip, area) {
-      const nomeAlvo = String(nomeEquip || "").trim().toLowerCase();
-      const areaAlvo = String(area || "").trim().toLowerCase();
+      const nomeAlvo = normalizarTexto(nomeEquip);
+      const areaAlvo = normalizarTexto(area);
       const eq = todosEquipamentos.value.find(e =>
-        e.nome.trim().toLowerCase() === nomeAlvo && (!areaAlvo || e.area.trim().toLowerCase() === areaAlvo)
+        normalizarTexto(e.nome) === nomeAlvo && (!areaAlvo || normalizarTexto(e.area) === areaAlvo)
       );
       return eq ? eq.periodicidade : "";
     }
