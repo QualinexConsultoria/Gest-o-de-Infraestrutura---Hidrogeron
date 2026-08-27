@@ -156,6 +156,31 @@ async function closeCorretivaApi(idChamado, resolucao, tecnico) {
   return handleApiResponse(res);
 }
 
+// payload: { idLog, dataHora, area, equipamento, usuario, statusInspecao, observacoes }
+// idLog/dataHora vêm prontos de quem chama (em vez de gerados aqui dentro) para
+// que a UI otimista use exatamente os mesmos valores enviados ao servidor.
+async function savePreventivaApi(payload) {
+  const params = new URLSearchParams({
+    action: "savePreventiva",
+    idLog: payload.idLog,
+    dataHora: payload.dataHora,
+    area: payload.area,
+    equipamento: payload.equipamento,
+    usuario: payload.usuario,
+    statusInspecao: payload.statusInspecao,
+    observacoes: payload.observacoes || "",
+    _t: Date.now(),
+  });
+  let res;
+  try {
+    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no savePreventiva:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -443,13 +468,36 @@ const PreventivaModule = {
       return "—";
     }
 
-    function badgeUltimaInspecao(eq) {
+    // Selo do card: "Pendente" fora do ciclo (7 dias), "Realizado Hoje"/"Inspecionado"
+    // se em dia, ou destaque de Não Conformidade mesmo dentro do ciclo (segurança).
+    function statusCicloEquipamento(eq) {
       const info = ultimaInspecao(eq);
-      if (!info) return "bg-slate-100 text-slate-500";
-      if (info.status === "C") return "bg-emerald-100 text-emerald-700";
-      if (info.status === "NC") return "bg-red-100 text-red-700";
-      return "bg-slate-100 text-slate-600";
+      if (!info) return { label: "Pendente", badge: "bg-amber-100 text-amber-700 border border-amber-200" };
+
+      const agora = new Date();
+      const inicioHoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+      const seteDiasAtras = new Date(agora.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+      if (info.dataObj < seteDiasAtras) {
+        return { label: "Pendente", badge: "bg-amber-100 text-amber-700 border border-amber-200" };
+      }
+      if (info.status === "NC") {
+        return { label: "⚠ Não Conforme", badge: "bg-red-100 text-red-700 border border-red-200" };
+      }
+      return {
+        label: info.dataObj >= inicioHoje ? "✓ Realizado Hoje" : "✓ Inspecionado",
+        badge: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+      };
     }
+
+    // Progresso do setor selecionado: quantos equipamentos já estão em dia
+    // (inspecionados no ciclo dos últimos 7 dias) vs. o total da área.
+    const progressoSetor = computed(() => {
+      const total = equipamentos.value.length;
+      if (total === 0) return { feitos: 0, total: 0, pct: 0 };
+      const feitos = equipamentos.value.filter(eq => statusCicloEquipamento(eq).label !== "Pendente").length;
+      return { feitos, total, pct: Math.round((feitos / total) * 100) };
+    });
 
     function formatarData(d) {
       if (!d) return "-";
@@ -530,29 +578,60 @@ const PreventivaModule = {
       }
       salvando.value = true;
       try {
-        const payload = {
-          action: "savePreventiva",
-          area: areaSelecionada.value,
-          equipamentoId: equipamentoSelecionado.value.idDisplay || equipamentoSelecionado.value.id,
-          equipamento: equipamentoSelecionado.value.nome,
-          modelo: equipamentoSelecionado.value.modelo,
-          tag: equipamentoSelecionado.value.tag,
-          responsavel: props.user.nome,
-          email: props.user.email,
-          data: nowISO(),
-          statusGeral: temNC.value ? "Não Conforme" : "Conforme",
-          itens: itensChecklist.value.map(i => ({ item: i.texto, status: i.status })),
-          descricaoNaoConformidade: temNC.value ? descricaoNC.value.trim() : "",
-          fotoBase64: temNC.value ? fotoBase64.value : null,
-          fotoNome: temNC.value ? fotoNome.value : "",
-          observacoes: observacoesGerais.value.trim(),
-        };
-        await postToAppsScript(payload);
+        const idLog = "LOG-" + Date.now();
+        const dataHora = new Date().toISOString().replace("T", " ").substring(0, 16);
+        const statusInspecao = temNC.value ? "Não Conforme" : "Conforme";
+
+        const partesObs = [];
+        if (temNC.value) partesObs.push("Não Conformidade: " + descricaoNC.value.trim());
+        if (observacoesGerais.value.trim()) partesObs.push(observacoesGerais.value.trim());
+        const observacoesFinal = partesObs.join(" | ");
+
+        const equipamentoNome = equipamentoSelecionado.value.nome;
+        const areaAtual = areaSelecionada.value;
+        const usuarioNome = props.user.nome;
+        const foto = fotoBase64.value;
+        const fotoNomeAnexo = fotoNome.value;
+
+        const resp = await savePreventivaApi({
+          idLog, dataHora,
+          area: areaAtual,
+          equipamento: equipamentoNome,
+          usuario: usuarioNome,
+          statusInspecao,
+          observacoes: observacoesFinal,
+        });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+
+        // Evidência fotográfica (pesada): enviada à parte, via POST best-effort,
+        // pois não cabe em query params de uma requisição GET.
+        if (temNC.value && foto) {
+          postToAppsScript({
+            action: "attachPreventivaEvidencia",
+            idLog,
+            fotoBase64: foto,
+            fotoNome: fotoNomeAnexo,
+          }).catch(err => console.error("Erro ao enviar evidência fotográfica:", err));
+        }
+
+        // Estado otimista: adiciona o novo registro em memória para que o card
+        // do equipamento já reflita "Realizado Hoje" ao voltar para a lista.
+        preventivasHistorico.value.unshift({
+          id: idLog,
+          data: dataHora,
+          area: areaAtual,
+          equipamento: equipamentoNome,
+          usuario: usuarioNome,
+          status: temNC.value ? "NC" : "C",
+          observacoes: observacoesFinal,
+        });
+
         pushToast("Inspeção registrada com sucesso!", "success");
         voltarLista();
-        // Resposta é opaca (mode: "no-cors"); resincroniza em segundo plano
-        // após um pequeno intervalo para dar tempo do Apps Script processar.
-        setTimeout(() => carregarEquipamentos({ silencioso: true }), 2000);
+
+        // NÃO recarrega a API imediatamente — a planilha pode levar um instante
+        // para consolidar a escrita. Sincroniza em segundo plano só depois de 3s.
+        setTimeout(() => carregarEquipamentos({ silencioso: true }), 3000);
       } catch (err) {
         console.error(err);
         pushToast("Erro ao salvar inspeção. Tente novamente.", "error");
@@ -565,12 +644,12 @@ const PreventivaModule = {
     watch(areaSelecionada, carregarEquipamentos);
 
     return {
-      areas, areaSelecionada, equipamentos, loadingEquip, erroCarregamento,
+      areas, areaSelecionada, equipamentos, loadingEquip, erroCarregamento, progressoSetor,
       view, equipamentoSelecionado, itensChecklist, temNC, progresso,
       descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
       inputCameraRef, inputGaleriaRef,
       abrirEquipamento, voltarLista, setItemStatus, onFotoSelecionada, removerFoto, salvarInspecao,
-      ultimaInspecao, formatarStatusLabel, badgeUltimaInspecao, formatarData,
+      ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData,
     };
   },
   template: `
@@ -600,23 +679,35 @@ const PreventivaModule = {
         Nenhum equipamento cadastrado para esta área.
       </div>
 
-      <div v-else class="space-y-3">
-        <button v-for="eq in equipamentos" :key="eq.id" @click="abrirEquipamento(eq)"
-          class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
-          <div class="min-w-0">
-            <p class="font-semibold text-slate-800 truncate">
-              <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
-            </p>
-            <p class="text-xs text-slate-400 mt-0.5 truncate">
-              <template v-if="ultimaInspecao(eq)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq).status) }} · {{ formatarData(ultimaInspecao(eq).dataObj) }}</template>
-              <template v-else>Sem inspeção registrada</template>
-            </p>
+      <template v-else>
+        <div class="bg-white rounded-xl border border-slate-200 p-4">
+          <div class="flex justify-between text-xs font-semibold text-slate-500 mb-1">
+            <span>Progresso do setor (últimos 7 dias)</span>
+            <span>{{ progressoSetor.feitos }}/{{ progressoSetor.total }}</span>
           </div>
-          <span class="text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0" :class="badgeUltimaInspecao(eq)">
-            {{ ultimaInspecao(eq) ? formatarStatusLabel(ultimaInspecao(eq).status) : 'Pendente' }}
-          </span>
-        </button>
-      </div>
+          <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-full bg-emerald-500 transition-all duration-300" :style="{ width: progressoSetor.pct + '%' }"></div>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <button v-for="eq in equipamentos" :key="eq.id" @click="abrirEquipamento(eq)"
+            class="w-full text-left btn-tap bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 hover:shadow-md transition-all flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="font-semibold text-slate-800 truncate">
+                <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
+              </p>
+              <p class="text-xs text-slate-400 mt-0.5 truncate">
+                <template v-if="ultimaInspecao(eq)">Última inspeção: {{ formatarStatusLabel(ultimaInspecao(eq).status) }} · {{ formatarData(ultimaInspecao(eq).dataObj) }}</template>
+                <template v-else>Sem inspeção registrada</template>
+              </p>
+            </div>
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0" :class="statusCicloEquipamento(eq).badge">
+              {{ statusCicloEquipamento(eq).label }}
+            </span>
+          </button>
+        </div>
+      </template>
     </template>
 
     <!-- NÍVEL 2: execução do checklist do equipamento -->
