@@ -444,15 +444,6 @@ function diasPeriodicidade(periodicidade) {
   return PERIODICIDADE_DIAS[v] || null;
 }
 
-// Cores fixas da tag de periodicidade de cada item do checklist.
-function corPeriodicidadeItem(p) {
-  const v = String(p || "").trim().toLowerCase();
-  if (v === "mensal") return "bg-blue-100 text-blue-700 border border-blue-200";
-  if (v === "semestral") return "bg-orange-100 text-orange-700 border border-orange-200";
-  if (v === "anual") return "bg-purple-100 text-purple-700 border border-purple-200";
-  return "bg-slate-100 text-slate-600 border border-slate-200";
-}
-
 /* ==========================================================================
    FICHA DE INSPEÇÃO TÉCNICA / LAUDO OPERACIONAL (RSG-6301-01)
    ========================================================================== */
@@ -570,32 +561,16 @@ const LaudoPreventivaModal = {
         <!-- Matriz de Verificação -->
         <div v-if="laudo.itens && laudo.itens.length">
           <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Matriz de Verificação</h4>
-          <div class="border border-slate-200 rounded-lg overflow-x-auto">
-            <table class="w-full text-sm border-collapse">
-              <thead>
-                <tr class="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                  <th class="text-left font-bold px-2.5 py-2">Tipo de Manutenção</th>
-                  <th class="text-left font-bold px-2.5 py-2">Item Verificado</th>
-                  <th class="text-left font-bold px-2.5 py-2">Periodicidade</th>
-                  <th class="text-left font-bold px-2.5 py-2">Responsável</th>
-                  <th class="text-left font-bold px-2.5 py-2">Resultado</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in laudo.itens" :key="idx" :class="idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'">
-                  <td class="px-2.5 py-2 text-slate-600">{{ item.tipoManutencao || '-' }}</td>
-                  <td class="px-2.5 py-2 text-slate-800 font-medium">{{ item.texto }}</td>
-                  <td class="px-2.5 py-2 text-slate-600">{{ item.periodicidade || '-' }}</td>
-                  <td class="px-2.5 py-2 text-slate-600">{{ item.responsavel || '-' }}</td>
-                  <td class="px-2.5 py-2">
-                    <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
-                      :class="item.status === 'NC' ? 'bg-red-100 text-red-700' : item.status === 'NA' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
-                      {{ formatarStatusItem(item.status) }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="border border-slate-200 rounded-lg overflow-hidden">
+            <div v-for="(item, idx) in laudo.itens" :key="idx"
+              class="flex items-center justify-between gap-2 px-3 py-2 text-sm"
+              :class="idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'">
+              <span class="text-slate-700">{{ item.texto }}</span>
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
+                :class="item.status === 'NC' ? 'bg-red-100 text-red-700' : item.status === 'NA' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
+                {{ formatarStatusItem(item.status) }}
+              </span>
+            </div>
           </div>
         </div>
         <p v-else class="text-xs text-slate-400 italic">Detalhamento por item não disponível para este registro histórico — apenas o resultado geral foi preservado.</p>
@@ -668,7 +643,6 @@ const PreventivaModule = {
     const meses = MESES_PT;
 
     const todosEquipamentos = ref([]);
-    const todosChecklistItens = ref([]);
     const preventivasHistorico = ref([]);
     const loadingDados = ref(false);
     const erroCarregamento = ref("");
@@ -677,9 +651,7 @@ const PreventivaModule = {
     const view = ref("setores");
     const areaSelecionada = ref(null);
     const equipamentoSelecionado = ref(null);
-    const itensChecklist = ref([]); // itens VENCIDOS: [{ texto, status, periodicidade, tipoManutencao, responsavel }]
-    const itensEmDiaList = ref([]); // itens ainda dentro do ciclo (somente leitura)
-    const mostrarItensEmDia = ref(false);
+    const itensChecklist = ref([]); // [{ texto, status }]
     const descricaoNC = ref("");
     const observacoesGerais = ref("");
     const fotoBase64 = ref(null);
@@ -724,19 +696,6 @@ const PreventivaModule = {
           itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados
             || e.ItensInspecaoRecomendados || e.itensInspecaoRecomendados || "",
         }));
-
-        const checklistRaw = data.checklistItens || data.ChecklistItens || data.checklist_itens
-          || (data.data && data.data.checklistItens) || [];
-        todosChecklistItens.value = checklistRaw.map(c => ({
-          id: c.ID || c.Id || c.id || uid(),
-          equipamento: c.Equipamento || c.equipamento || "",
-          area: c.Area || c.area || "",
-          item: c.Item || c.Nome_Item || c.NomeItem || c.item || "",
-          periodicidade: normalizePeriodicidade(c.Periodicidade || c.periodicidade || ""),
-          tipoManutencao: c.Tipo_Manutencao || c.TipoManutencao || c.tipo_manutencao || c.tipoManutencao || "",
-          responsavel: c.Responsavel || c.responsavel || "",
-        }));
-
         preventivasHistorico.value = extractPreventivas(data);
       } catch (err) {
         console.error(err);
@@ -783,36 +742,6 @@ const PreventivaModule = {
         }
       });
       return melhor;
-    }
-
-    // Itens do checklist de um equipamento: usa a tabela checklistItens
-    // (estruturada, com periodicidade/tipo/responsável por item) quando
-    // disponível; senão cai no fallback do texto simples do cadastro do
-    // equipamento (itens sem periodicidade própria).
-    function itensDoEquipamento(eq) {
-      const nomeAlvo = String(eq.nome || "").trim().toLowerCase();
-      const areaAlvo = String(eq.area || "").trim().toLowerCase();
-      const estruturados = todosChecklistItens.value.filter(c => {
-        if (!c.item) return false;
-        if (c.equipamento.trim().toLowerCase() !== nomeAlvo) return false;
-        if (c.area && areaAlvo && c.area.trim().toLowerCase() !== areaAlvo) return false;
-        return true;
-      });
-      if (estruturados.length > 0) return estruturados;
-      return parseItensInspecao(eq.itensInspecao).map(texto => ({
-        item: texto, periodicidade: "", tipoManutencao: "", responsavel: "",
-      }));
-    }
-
-    // Vencimento do item: última execução do EQUIPAMENTO (todos os itens de
-    // uma sessão são avaliados juntos, então compartilham essa data-base) +
-    // janela da periodicidade do próprio item (Mensal=30d/Semestral=180d/
-    // Anual=365d). Sem histórico algum, o item já nasce vencido.
-    function statusVencimentoItem(item, ultimaEq) {
-      const dias = diasPeriodicidade(item.periodicidade) || 30;
-      if (!ultimaEq) return { vencido: true, dataUltima: null, dataProxima: null };
-      const dataProxima = new Date(ultimaEq.dataObj.getTime() + dias * 24 * 60 * 60 * 1000);
-      return { vencido: dataProxima.getTime() <= Date.now(), dataUltima: ultimaEq.dataObj, dataProxima };
     }
 
     function formatarStatusLabel(status) {
@@ -896,27 +825,7 @@ const PreventivaModule = {
 
     function abrirEquipamento(eq) {
       equipamentoSelecionado.value = eq;
-
-      const ultimaEq = ultimaInspecao(eq);
-      const vencidos = [];
-      const emDia = [];
-      itensDoEquipamento(eq).forEach(it => {
-        const st = statusVencimentoItem(it, ultimaEq);
-        const base = {
-          texto: it.item,
-          periodicidade: it.periodicidade,
-          tipoManutencao: it.tipoManutencao,
-          responsavel: it.responsavel,
-          dataUltima: st.dataUltima,
-          dataProxima: st.dataProxima,
-        };
-        if (st.vencido) vencidos.push({ ...base, status: null });
-        else emDia.push(base);
-      });
-      itensChecklist.value = vencidos;
-      itensEmDiaList.value = emDia;
-      mostrarItensEmDia.value = false;
-
+      itensChecklist.value = parseItensInspecao(eq.itensInspecao).map(texto => ({ texto, status: null }));
       descricaoNC.value = "";
       observacoesGerais.value = "";
       fotoBase64.value = null;
@@ -928,8 +837,6 @@ const PreventivaModule = {
       view.value = "lista";
       equipamentoSelecionado.value = null;
       itensChecklist.value = [];
-      itensEmDiaList.value = [];
-      mostrarItensEmDia.value = false;
       descricaoNC.value = "";
       observacoesGerais.value = "";
       fotoBase64.value = null;
@@ -1092,10 +999,7 @@ const PreventivaModule = {
           periodicidade: equipamentoSelecionado.value.periodicidade,
           inspetor: usuarioNome,
           statusGeral: statusInspecao,
-          itens: itensChecklist.value.map(i => ({
-            texto: i.texto, status: i.status,
-            periodicidade: i.periodicidade, tipoManutencao: i.tipoManutencao, responsavel: i.responsavel,
-          })),
+          itens: itensChecklist.value.map(i => ({ texto: i.texto, status: i.status })),
           observacoes: observacoesFinal,
           fotoBase64: temNC.value ? foto : null,
         };
@@ -1239,7 +1143,7 @@ const PreventivaModule = {
       areas, meses, periodicidadesCanonicas: PERIODICIDADES_ORDEM, view, areaSelecionada, equipamentoSelecionado,
       loadingDados, erroCarregamento, statsPorArea, equipamentosDaAreaAtual, progressoSetor,
       periodicidadesDaArea, filtroPeriodicidadeLista, equipamentosFiltradosLista,
-      itensChecklist, itensEmDiaList, mostrarItensEmDia, temNC, progresso, corPeriodicidadeItem,
+      itensChecklist, temNC, progresso,
       descricaoNC, observacoesGerais, fotoBase64, fotoNome, salvando,
       inputCameraRef, inputGaleriaRef,
       abrirArea, voltarSetores, abrirHistorico,
@@ -1404,28 +1308,14 @@ const PreventivaModule = {
         </div>
       </div>
 
-      <div v-if="itensChecklist.length === 0 && itensEmDiaList.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      <div v-if="itensChecklist.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
         Nenhum item de inspeção cadastrado para este equipamento.
       </div>
 
-      <div v-else-if="itensChecklist.length === 0" class="bg-emerald-50 border border-emerald-200 rounded-xl p-6 text-center text-emerald-700 font-semibold">
-        ✓ Tudo em dia — nenhum item pendente para hoje neste equipamento.
-      </div>
-
       <div v-else class="space-y-3">
-        <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide">Itens a Inspecionar Hoje</h4>
         <div v-for="(item, idx) in itensChecklist" :key="idx" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <div class="flex flex-wrap gap-1.5 mb-2">
-            <span v-if="item.periodicidade" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide" :class="corPeriodicidadeItem(item.periodicidade)">
-              {{ item.periodicidade }}
-            </span>
-            <span v-if="item.tipoManutencao" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200">
-              {{ item.tipoManutencao }}
-            </span>
-          </div>
-          <p class="font-semibold text-slate-800">{{ item.texto }}</p>
-          <p v-if="item.responsavel" class="text-xs text-slate-400 mt-0.5 mb-3">Responsável: {{ item.responsavel }}</p>
-          <div class="grid grid-cols-3 gap-2" :class="!item.responsavel ? 'mt-3' : ''">
+          <p class="font-semibold text-slate-800 mb-3">{{ item.texto }}</p>
+          <div class="grid grid-cols-3 gap-2">
             <button @click="setItemStatus(idx, 'C')"
               class="btn-tap py-2.5 rounded-lg text-sm font-bold border-2 transition-colors"
               :class="item.status === 'C' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700'">
@@ -1487,30 +1377,6 @@ const PreventivaModule = {
           <span v-if="salvando" class="spinner"></span>
           <span>{{ salvando ? "Salvando..." : "Salvar Inspeção do Equipamento" }}</span>
         </button>
-      </div>
-
-      <div v-if="itensEmDiaList.length" class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <button @click="mostrarItensEmDia = !mostrarItensEmDia"
-          class="btn-tap w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-700">
-          <span>Itens em Dia ({{ itensEmDiaList.length }})</span>
-          <span class="text-slate-400 transition-transform" :class="mostrarItensEmDia ? 'rotate-180' : ''">▾</span>
-        </button>
-        <div v-if="mostrarItensEmDia" class="border-t border-slate-100 divide-y divide-slate-100">
-          <div v-for="(item, idx) in itensEmDiaList" :key="idx" class="px-4 py-3">
-            <div class="flex flex-wrap gap-1.5 mb-1.5">
-              <span v-if="item.periodicidade" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide" :class="corPeriodicidadeItem(item.periodicidade)">
-                {{ item.periodicidade }}
-              </span>
-              <span v-if="item.tipoManutencao" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200">
-                {{ item.tipoManutencao }}
-              </span>
-            </div>
-            <p class="text-sm font-medium text-slate-700">{{ item.texto }}</p>
-            <p class="text-xs text-slate-400 mt-0.5">
-              Última: {{ formatarData(item.dataUltima) }} · Próxima: {{ formatarData(item.dataProxima) }}
-            </p>
-          </div>
-        </div>
       </div>
     </template>
 
