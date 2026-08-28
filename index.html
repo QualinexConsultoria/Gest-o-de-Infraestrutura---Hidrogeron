@@ -536,6 +536,105 @@ const MESES_PT = [
 ];
 const HISTORICO_POR_PAGINA = 20;
 
+/* ==========================================================================
+   SELETOR MULTI-MÊS (dropdown com checkboxes + atalhos de tri/semestre)
+   modelValue é um array de números de mês (1-12). Array vazio = "Todos os
+   Meses" — tanto na exibição (todas as caixas aparecem marcadas) quanto na
+   filtragem (nenhuma restrição de mês é aplicada).
+   ========================================================================== */
+const ATALHOS_MESES = [
+  { label: "1º Tri", meses: [1, 2, 3] },
+  { label: "2º Tri", meses: [4, 5, 6] },
+  { label: "3º Tri", meses: [7, 8, 9] },
+  { label: "4º Tri", meses: [10, 11, 12] },
+  { label: "1º Sem", meses: [1, 2, 3, 4, 5, 6] },
+  { label: "2º Sem", meses: [7, 8, 9, 10, 11, 12] },
+];
+
+const MesesMultiSelect = {
+  props: { modelValue: { type: Array, default: () => [] } },
+  emits: ["update:modelValue"],
+  setup(props, { emit }) {
+    const aberto = ref(false);
+    const raizRef = ref(null);
+
+    function estaSelecionado(m) {
+      return !props.modelValue.length || props.modelValue.includes(m);
+    }
+
+    function alternarMes(m) {
+      if (!props.modelValue.length) {
+        // Estava em "Todos" (array vazio) — desmarcar 1 mês parte para o
+        // conjunto explícito com os outros 11 meses.
+        emit("update:modelValue", MESES_PT.map(x => x.v).filter(v => v !== m));
+        return;
+      }
+      const atual = props.modelValue.slice();
+      const idx = atual.indexOf(m);
+      if (idx === -1) atual.push(m);
+      else atual.splice(idx, 1);
+      // Se voltou a ter os 12 marcados, normaliza para o array vazio (canônico "Todos").
+      emit("update:modelValue", atual.length === 12 ? [] : atual);
+    }
+
+    function selecionarTodos() {
+      emit("update:modelValue", []);
+    }
+
+    function aplicarAtalho(meses) {
+      emit("update:modelValue", meses.slice());
+    }
+
+    const resumo = computed(() => {
+      const sel = props.modelValue;
+      if (!sel || sel.length === 0 || sel.length === 12) return "Todos os Meses";
+      if (sel.length <= 3) {
+        return sel.slice().sort((a, b) => a - b)
+          .map(m => ((MESES_PT.find(x => x.v === m) || {}).l || "").slice(0, 3))
+          .join(", ");
+      }
+      return sel.length + " meses selecionados";
+    });
+
+    function fecharFora(e) {
+      if (raizRef.value && !raizRef.value.contains(e.target)) aberto.value = false;
+    }
+    onMounted(() => document.addEventListener("click", fecharFora));
+    onUnmounted(() => document.removeEventListener("click", fecharFora));
+
+    return {
+      aberto, raizRef, meses: MESES_PT, atalhos: ATALHOS_MESES,
+      estaSelecionado, alternarMes, selecionarTodos, aplicarAtalho, resumo,
+    };
+  },
+  template: `
+  <div class="relative" ref="raizRef">
+    <button type="button" @click="aberto = !aberto"
+      class="btn-tap w-full flex items-center justify-between gap-1.5 rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+      <span class="truncate">{{ resumo }}</span>
+      <span class="text-slate-400 text-xs shrink-0">{{ aberto ? "▲" : "▼" }}</span>
+    </button>
+    <div v-if="aberto" class="absolute z-20 mt-1 w-64 max-w-[85vw] bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
+      <div class="flex flex-wrap gap-1 mb-2 pb-2 border-b border-slate-100">
+        <button v-for="a in atalhos" :key="a.label" type="button" @click="aplicarAtalho(a.meses)"
+          class="btn-tap text-[11px] font-semibold px-2 py-1 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600">
+          {{ a.label }}
+        </button>
+      </div>
+      <label class="flex items-center gap-2 py-1 font-semibold text-slate-700 cursor-pointer border-b border-slate-100 mb-1 pb-2">
+        <input type="checkbox" :checked="!modelValue.length" @change="selecionarTodos" class="rounded border-slate-300 text-sky-600 focus:ring-sky-500">
+        Selecionar Todos / Limpar Seleção
+      </label>
+      <div class="grid grid-cols-2 gap-x-2">
+        <label v-for="m in meses" :key="m.v" class="flex items-center gap-2 py-1 cursor-pointer text-slate-600 hover:text-slate-800">
+          <input type="checkbox" :checked="estaSelecionado(m.v)" @change="alternarMes(m.v)" class="rounded border-slate-300 text-sky-600 focus:ring-sky-500">
+          {{ m.l.slice(0, 3) }}
+        </label>
+      </div>
+    </div>
+  </div>`
+};
+
 // Periodicidades industriais suportadas e sua janela de validade em dias.
 const PERIODICIDADES_ORDEM = ["Diária", "Semanal", "Quinzenal", "Mensal", "Bimestral", "Trimestral", "Semestral", "Anual"];
 const PERIODICIDADE_DIAS = {
@@ -3601,6 +3700,7 @@ const CORES_COCKPIT = {
 };
 
 const DashboardModule = {
+  components: { MesesMultiSelect },
   emits: ["navigate"],
   setup(props, { emit }) {
     const loading = ref(true);
@@ -3613,7 +3713,7 @@ const DashboardModule = {
 
     const ANO_ATUAL_DASH = new Date().getFullYear();
     const filtroAno = ref(ANO_ATUAL_DASH);
-    const filtroMes = ref("todos");
+    const filtroMeses = ref([]); // array de números de mês (1-12); vazio = todos os meses
     const filtroArea = ref("todas");
 
     function parseData(v) {
@@ -3660,7 +3760,7 @@ const DashboardModule = {
       const { ano, mes } = extrairAnoMes(dataStr);
       if (ano === null) return false;
       if (ano !== filtroAno.value) return false;
-      if (filtroMes.value !== "todos" && mes !== Number(filtroMes.value)) return false;
+      if (filtroMeses.value.length && !filtroMeses.value.includes(mes)) return false;
       return true;
     }
     const preventivasFiltradas = computed(() => preventivas.value.filter(p => noPeriodo(p.data) && areaOk(p.area)));
@@ -3687,8 +3787,8 @@ const DashboardModule = {
     // Aderência ao Cronograma Preventivo — mesmo motor de agendamento da
     // Preventiva/Indicadores (mesesProgramadosEquipamento + a meta da 3ª
     // quinta-feira, getThirdThursday).
-    function calcularAderencia(ativos, ano, mesFiltro) {
-      const mesesAlvo = mesFiltro === "todos" ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] : [Number(mesFiltro)];
+    function calcularAderencia(ativos, ano, mesesFiltro) {
+      const mesesAlvo = (mesesFiltro && mesesFiltro.length) ? mesesFiltro : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
       let programadas = 0, noPrazo = 0;
       ativos.forEach(ativo => {
         (ativo.perfis || []).forEach(perfil => {
@@ -3742,7 +3842,7 @@ const DashboardModule = {
       return Math.round((lista.filter(p => p.status === "C").length / lista.length) * 100);
     });
     const aderenciaPlano = computed(() => {
-      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMes.value);
+      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMeses.value);
       return programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
     });
     const disponibilidadeMedia = computed(() => {
@@ -3768,24 +3868,26 @@ const DashboardModule = {
     // ===== Card 4: MTTR Médio Global =====
     const mttrGlobal = computed(() => mttrDeLista(corretivasFiltradas.value));
 
-    // ===== Gráfico 1: tendência mensal (ano inteiro, respeita só o setor) =====
+    // ===== Gráfico 1: tendência mensal (respeita setor + meses selecionados) =====
     const dadosTendenciaMensal = computed(() => {
       const ano = filtroAno.value;
-      const preventivasPorMes = new Array(12).fill(0);
-      const corretivasPorMes = new Array(12).fill(0);
+      const mesesAlvo = filtroMeses.value.length ? meses.filter(m => filtroMeses.value.includes(m.v)) : meses;
+      const preventivasPorMes = new Array(mesesAlvo.length).fill(0);
+      const corretivasPorMes = new Array(mesesAlvo.length).fill(0);
+      const idxPorMes = new Map(mesesAlvo.map((m, i) => [m.v, i]));
       preventivas.value.forEach(p => {
         if (!areaOk(p.area)) return;
         const { ano: anoLog, mes } = extrairAnoMes(p.data);
-        if (anoLog !== ano || !mes) return;
-        preventivasPorMes[mes - 1]++;
+        if (anoLog !== ano || !mes || !idxPorMes.has(mes)) return;
+        preventivasPorMes[idxPorMes.get(mes)]++;
       });
       corretivas.value.forEach(c => {
         if (!areaOk(c.area)) return;
         const { ano: anoLog, mes } = extrairAnoMes(c.data);
-        if (anoLog !== ano || !mes) return;
-        corretivasPorMes[mes - 1]++;
+        if (anoLog !== ano || !mes || !idxPorMes.has(mes)) return;
+        corretivasPorMes[idxPorMes.get(mes)]++;
       });
-      return { labels: meses.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
+      return { labels: mesesAlvo.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
     });
 
     // ===== Gráfico 2: status operacional da planta (doughnut) =====
@@ -3985,7 +4087,7 @@ const DashboardModule = {
 
     return {
       loading, erro, carregar, areas, meses,
-      filtroAno, filtroMes, filtroArea, anosDisponiveis,
+      filtroAno, filtroMeses, filtroArea, anosDisponiveis,
       irPreventiva, irCorretiva, irLaudos,
       healthScore, healthBadge, aderenciaPlano, corretivasAtivasCount, corretivasAtivasCriticas, mttrGlobal,
       canvasTendenciaRef, canvasStatusRef, canvasSetorRef, canvasDowntimeRef,
@@ -4000,10 +4102,7 @@ const DashboardModule = {
         <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
           <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
         </select>
-        <select v-model="filtroMes" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
-          <option value="todos">Mês: Todos</option>
-          <option v-for="m in meses" :key="m.v" :value="m.v">{{ m.l }}</option>
-        </select>
+        <meses-multi-select v-model="filtroMeses"></meses-multi-select>
         <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 col-span-2 sm:col-span-1">
           <option value="todas">Setor: Todos</option>
           <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
@@ -4233,6 +4332,7 @@ const CORES_DASHBOARD = {
 };
 
 const IndicadoresModule = {
+  components: { MesesMultiSelect },
   setup() {
     const loading = ref(true);
     const erro = ref("");
@@ -4244,7 +4344,7 @@ const IndicadoresModule = {
 
     const ANO_ATUAL_IND = new Date().getFullYear();
     const filtroAno = ref(ANO_ATUAL_IND);
-    const filtroMes = ref("todos"); // 'todos' | 1-12
+    const filtroMeses = ref([]); // array de números de mês (1-12); vazio = todos os meses
     const filtroArea = ref("todas");
 
     // Parse robusto a fuso (ver parseDataHoraLocal/extrairAnoMes globais):
@@ -4298,7 +4398,7 @@ const IndicadoresModule = {
       const { ano, mes } = extrairAnoMes(dataStr);
       if (ano === null) return false;
       if (ano !== filtroAno.value) return false;
-      if (filtroMes.value !== "todos" && mes !== Number(filtroMes.value)) return false;
+      if (filtroMeses.value.length && !filtroMeses.value.includes(mes)) return false;
       return true;
     }
 
@@ -4330,8 +4430,8 @@ const IndicadoresModule = {
     // usando o mesmo motor de agendamento do Calendário Mestre), verifica se
     // existe um log de preventiva daquele ativo no mês, executado até a data
     // planejada (3ª quinta-feira — ver getThirdThursday).
-    function calcularAderencia(ativos, ano, mesFiltro) {
-      const mesesAlvo = mesFiltro === "todos" ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] : [Number(mesFiltro)];
+    function calcularAderencia(ativos, ano, mesesFiltro) {
+      const mesesAlvo = (mesesFiltro && mesesFiltro.length) ? mesesFiltro : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
       let programadas = 0, noPrazo = 0;
       ativos.forEach(ativo => {
         (ativo.perfis || []).forEach(perfil => {
@@ -4368,7 +4468,7 @@ const IndicadoresModule = {
     // Sem nenhum ciclo programado no período (nenhum ativo com periodicidade
     // cadastrada cai naquele mês), não há plano a descumprir: 100%.
     const aderenciaPlano = computed(() => {
-      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMes.value);
+      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMeses.value);
       return programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
     });
 
@@ -4392,38 +4492,40 @@ const IndicadoresModule = {
     // "tempo em operação" a ser dividido pelas falhas ocorridas nele. Sem
     // nenhuma corretiva no período (divisão por zero), não há falha alguma
     // registrada: exibido como "100% Confiável" em vez de calcular um MTBF.
-    function diasNoPeriodo(ano, mesFiltro) {
-      if (mesFiltro === "todos") {
+    function diasNoPeriodo(ano, mesesFiltro) {
+      if (!mesesFiltro || !mesesFiltro.length) {
         const bissexto = (ano % 4 === 0 && ano % 100 !== 0) || ano % 400 === 0;
         return bissexto ? 366 : 365;
       }
-      return new Date(ano, Number(mesFiltro), 0).getDate();
+      return mesesFiltro.reduce((total, mes) => total + new Date(ano, mes, 0).getDate(), 0);
     }
     const mtbf = computed(() => {
       const qtd = corretivasFiltradas.value.length;
-      const horasOperacao = diasNoPeriodo(filtroAno.value, filtroMes.value) * 24;
+      const horasOperacao = diasNoPeriodo(filtroAno.value, filtroMeses.value) * 24;
       if (qtd === 0) return { confiavel: true, horas: horasOperacao };
       return { confiavel: false, horas: horasOperacao / qtd };
     });
 
-    // ===== Gráfico 1: histórico mensal (ano inteiro, respeita só o filtro de setor) =====
+    // ===== Gráfico 1: histórico mensal (respeita setor + meses selecionados) =====
     const dadosGraficoMensal = computed(() => {
       const ano = filtroAno.value;
-      const preventivasPorMes = new Array(12).fill(0);
-      const corretivasPorMes = new Array(12).fill(0);
+      const mesesAlvo = filtroMeses.value.length ? meses.filter(m => filtroMeses.value.includes(m.v)) : meses;
+      const preventivasPorMes = new Array(mesesAlvo.length).fill(0);
+      const corretivasPorMes = new Array(mesesAlvo.length).fill(0);
+      const idxPorMes = new Map(mesesAlvo.map((m, i) => [m.v, i]));
       preventivas.value.forEach(p => {
         if (!areaOk(p.area)) return;
         const { ano: anoLog, mes } = extrairAnoMes(p.data);
-        if (anoLog !== ano || !mes) return;
-        preventivasPorMes[mes - 1]++;
+        if (anoLog !== ano || !mes || !idxPorMes.has(mes)) return;
+        preventivasPorMes[idxPorMes.get(mes)]++;
       });
       corretivas.value.forEach(c => {
         if (!areaOk(c.area)) return;
         const { ano: anoLog, mes } = extrairAnoMes(c.data);
-        if (anoLog !== ano || !mes) return;
-        corretivasPorMes[mes - 1]++;
+        if (anoLog !== ano || !mes || !idxPorMes.has(mes)) return;
+        corretivasPorMes[idxPorMes.get(mes)]++;
       });
-      return { labels: meses.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
+      return { labels: mesesAlvo.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
     });
 
     // ===== Gráfico 2: Top 5 equipamentos com mais corretivas (respeita todos os filtros) =====
@@ -4447,7 +4549,7 @@ const IndicadoresModule = {
     // ===== Tabela: disponibilidade por ativo =====
     const linhasDisponibilidade = computed(() => {
       return ativosFiltrados.value.map(ativo => {
-        const { programadas, noPrazo } = calcularAderencia([ativo], filtroAno.value, filtroMes.value);
+        const { programadas, noPrazo } = calcularAderencia([ativo], filtroAno.value, filtroMeses.value);
         // Ativo sem ciclo programado no período (ex: periodicidade anual fora
         // do mês filtrado) não tem plano a descumprir — 100%, não "—".
         const aderencia = programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
@@ -4585,7 +4687,7 @@ const IndicadoresModule = {
 
     return {
       loading, erro, carregar, areas, meses,
-      filtroAno, filtroMes, filtroArea, anosDisponiveis,
+      filtroAno, filtroMeses, filtroArea, anosDisponiveis,
       taxaConformidade, aderenciaPlano, mttr, mtbf,
       canvasMensalRef, canvasTop5Ref, canvasPrioridadeRef,
       linhasDisponibilidade, formatarHoras, formatarPercentual, formatarMtbf,
@@ -4598,10 +4700,7 @@ const IndicadoresModule = {
         <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
           <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
         </select>
-        <select v-model="filtroMes" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
-          <option value="todos">Mês: Todos</option>
-          <option v-for="m in meses" :key="m.v" :value="m.v">{{ m.l }}</option>
-        </select>
+        <meses-multi-select v-model="filtroMeses"></meses-multi-select>
         <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 col-span-2 sm:col-span-1">
           <option value="todas">Setor: Todos</option>
           <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
