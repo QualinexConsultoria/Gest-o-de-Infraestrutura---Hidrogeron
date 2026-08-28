@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -43,7 +44,7 @@
 <div id="app"></div>
 
 <script>
-const { createApp, ref, reactive, computed, onMounted, watch, onErrorCaptured } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, onErrorCaptured, nextTick } = Vue;
 
 /* ==========================================================================
    CONFIGURAÇÃO
@@ -3774,14 +3775,29 @@ const HomeHub = {
 };
 
 /* ==========================================================================
-   MÓDULO INDICADORES (KPIs)
+   MÓDULO INDICADORES — Dashboard Executivo Interativo (Chart.js)
    ========================================================================== */
+const CORES_DASHBOARD = {
+  preventiva: "#10b981",  // emerald-500
+  corretiva: "#ef4444",   // red-500
+  barra: "#0ea5e9",       // sky-500
+  prioridade: ["#60a5fa", "#fbbf24", "#fb923c", "#dc2626"], // Baixa/Média/Alta/Crítica
+};
+
 const IndicadoresModule = {
   setup() {
     const loading = ref(true);
     const erro = ref("");
     const preventivas = ref([]);
     const corretivas = ref([]);
+    const todosEquipamentos = ref([]);
+    const areas = AREAS;
+    const meses = MESES_PT;
+
+    const ANO_ATUAL_IND = new Date().getFullYear();
+    const filtroAno = ref(ANO_ATUAL_IND);
+    const filtroMes = ref("todos"); // 'todos' | 1-12
+    const filtroArea = ref("todas");
 
     function parseData(v) {
       const d = new Date(v);
@@ -3795,6 +3811,17 @@ const IndicadoresModule = {
         const data = await getInitialData();
         preventivas.value = extractPreventivas(data);
         corretivas.value = extractCorretivas(data);
+        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        todosEquipamentos.value = (Array.isArray(rawEquip) ? rawEquip : []).map(e => ({
+          idDisplay: e.ID || e.Id || e.id || "",
+          nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          tag: e.TAG || e.Tag || e.tag || "",
+          area: e.Area || e.area || "",
+          periodicidade: normalizePeriodicidade(
+            e.Periodicidade || e.periodicidade || e.Frequencia || e.frequencia || e.Frequência || e.frequência || ""
+          ),
+          mesReferencia: parseInt(e.Mes_Referencia || e.mes_referencia || e.MesReferencia || e.mesReferencia, 10) || 1,
+        }));
       } catch (err) {
         console.error(err);
         erro.value = "Não foi possível carregar os indicadores.";
@@ -3803,94 +3830,382 @@ const IndicadoresModule = {
       }
     }
 
-    const conformidade = computed(() => {
-      const c = preventivas.value.filter(p => p.status === "C").length;
-      const nc = preventivas.value.filter(p => p.status === "NC").length;
-      const total = c + nc;
-      return total === 0 ? null : Math.round((c / total) * 100);
+    // Anos disponíveis no seletor: união dos anos com dados reais + ano atual
+    // (garante que o filtro sempre tenha pelo menos o ano corrente, mesmo sem histórico).
+    const anosDisponiveis = computed(() => {
+      const anos = new Set([ANO_ATUAL_IND]);
+      preventivas.value.forEach(p => { const d = parseData(p.data); if (d) anos.add(d.getFullYear()); });
+      corretivas.value.forEach(c => { const d = parseData(c.data); if (d) anos.add(d.getFullYear()); });
+      return Array.from(anos).sort((a, b) => b - a);
     });
 
-    const mtbf = computed(() => {
-      const datas = corretivas.value.map(c => parseData(c.data)).filter(Boolean).sort((a, b) => a - b);
-      if (datas.length < 2) return null;
-      let totalMs = 0;
-      for (let i = 1; i < datas.length; i++) totalMs += (datas[i] - datas[i - 1]);
-      return totalMs / (datas.length - 1) / 36e5; // horas
+    function areaOk(area) {
+      return filtroArea.value === "todas" || normalizarTexto(area) === normalizarTexto(filtroArea.value);
+    }
+    function noPeriodo(dataStr) {
+      const d = parseData(dataStr);
+      if (!d) return false;
+      if (d.getFullYear() !== filtroAno.value) return false;
+      if (filtroMes.value !== "todos" && d.getMonth() + 1 !== Number(filtroMes.value)) return false;
+      return true;
+    }
+
+    const preventivasFiltradas = computed(() => preventivas.value.filter(p => noPeriodo(p.data) && areaOk(p.area)));
+    const corretivasFiltradas = computed(() => corretivas.value.filter(c => noPeriodo(c.data) && areaOk(c.area)));
+
+    // Unificação de ativos (mesma regra usada na Preventiva): linhas que
+    // compartilham ID, ou Nome+Área na ausência de ID, formam um só ativo
+    // com vários "perfis" (um por periodicidade cadastrada).
+    function chaveAtivoInd(eq) {
+      return eq.idDisplay
+        ? "id:" + normalizarTexto(eq.idDisplay)
+        : "nome:" + normalizarTexto(eq.nome) + "|" + normalizarTexto(eq.area);
+    }
+    const ativosAgrupados = computed(() => {
+      const grupos = new Map();
+      todosEquipamentos.value.forEach(row => {
+        const chave = chaveAtivoInd(row);
+        if (!grupos.has(chave)) {
+          grupos.set(chave, { chave, idDisplay: row.idDisplay, nome: row.nome, tag: row.tag, area: row.area, perfis: [] });
+        }
+        grupos.get(chave).perfis.push(row);
+      });
+      return Array.from(grupos.values());
+    });
+    const ativosFiltrados = computed(() => ativosAgrupados.value.filter(a => areaOk(a.area)));
+
+    // Aderência ao Plano: para cada ciclo programado (ativo x perfil x mês,
+    // usando o mesmo motor de agendamento do Calendário Mestre), verifica se
+    // existe um log de preventiva daquele ativo no mês, executado até a data
+    // planejada (3ª quinta-feira — ver getThirdThursday).
+    function calcularAderencia(ativos, ano, mesFiltro) {
+      const mesesAlvo = mesFiltro === "todos" ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] : [Number(mesFiltro)];
+      let programadas = 0, noPrazo = 0;
+      ativos.forEach(ativo => {
+        (ativo.perfis || []).forEach(perfil => {
+          mesesProgramadosEquipamento(perfil).forEach(mes => {
+            if (!mesesAlvo.includes(mes)) return;
+            programadas++;
+            const planejada = getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
+            const executadaNoPrazo = preventivas.value.some(p => {
+              const d = parseData(p.data);
+              if (!d || d.getFullYear() !== ano || d.getMonth() + 1 !== mes) return false;
+              if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
+              if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+              return d.getTime() <= planejada;
+            });
+            if (executadaNoPrazo) noPrazo++;
+          });
+        });
+      });
+      return { programadas, noPrazo };
+    }
+
+    // ===== Card 1: Taxa de Conformidade =====
+    const taxaConformidade = computed(() => {
+      const lista = preventivasFiltradas.value;
+      if (lista.length === 0) return null;
+      const conformes = lista.filter(p => p.status === "C").length;
+      return Math.round((conformes / lista.length) * 100);
     });
 
-    const mttr = computed(() => {
-      const pares = corretivas.value
+    // ===== Card 2: Aderência ao Plano =====
+    const aderenciaPlano = computed(() => {
+      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMes.value);
+      return programadas === 0 ? null : Math.round((noPrazo / programadas) * 100);
+    });
+
+    // ===== Card 3: MTTR =====
+    function mttrDeLista(lista) {
+      const pares = lista
         .map(c => ({ abertura: parseData(c.data), conclusao: parseData(c.dataConclusao) }))
         .filter(p => p.abertura && p.conclusao && p.conclusao >= p.abertura);
       if (pares.length === 0) return null;
       const totalMs = pares.reduce((acc, p) => acc + (p.conclusao - p.abertura), 0);
       return totalMs / pares.length / 36e5; // horas
+    }
+    const mttr = computed(() => mttrDeLista(corretivasFiltradas.value));
+
+    // ===== Card 4: MTBF (estimativa) =====
+    // Horas de operação estimadas no período (dias do período x 24h) divididas
+    // pelo número de corretivas abertas — não há apontamento real de uptime
+    // por ativo no sistema, então o período filtrado é usado como proxy do
+    // "tempo em operação" a ser dividido pelas falhas ocorridas nele.
+    function diasNoPeriodo(ano, mesFiltro) {
+      if (mesFiltro === "todos") {
+        const bissexto = (ano % 4 === 0 && ano % 100 !== 0) || ano % 400 === 0;
+        return bissexto ? 366 : 365;
+      }
+      return new Date(ano, Number(mesFiltro), 0).getDate();
+    }
+    const mtbf = computed(() => {
+      const qtd = corretivasFiltradas.value.length;
+      if (qtd === 0) return null;
+      const horasOperacao = diasNoPeriodo(filtroAno.value, filtroMes.value) * 24;
+      return horasOperacao / qtd;
     });
 
-    const historico = computed(() => {
-      const p = preventivas.value.map(x => ({ tipo: "Preventiva", titulo: `${x.equipamento || ""} (${x.area || ""})`, data: x.data }));
-      const c = corretivas.value.map(x => ({ tipo: "Corretiva", titulo: `${x.equipamento || ""} (${x.area || ""})`, data: x.data }));
-      return [...p, ...c].sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 8);
+    // ===== Gráfico 1: histórico mensal (ano inteiro, respeita só o filtro de setor) =====
+    const dadosGraficoMensal = computed(() => {
+      const ano = filtroAno.value;
+      const preventivasPorMes = new Array(12).fill(0);
+      const corretivasPorMes = new Array(12).fill(0);
+      preventivas.value.forEach(p => {
+        if (!areaOk(p.area)) return;
+        const d = parseData(p.data);
+        if (!d || d.getFullYear() !== ano) return;
+        preventivasPorMes[d.getMonth()]++;
+      });
+      corretivas.value.forEach(c => {
+        if (!areaOk(c.area)) return;
+        const d = parseData(c.data);
+        if (!d || d.getFullYear() !== ano) return;
+        corretivasPorMes[d.getMonth()]++;
+      });
+      return { labels: meses.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
+    });
+
+    // ===== Gráfico 2: Top 5 equipamentos com mais corretivas (respeita todos os filtros) =====
+    const dadosTop5Equipamentos = computed(() => {
+      const contagem = new Map();
+      corretivasFiltradas.value.forEach(c => {
+        const nome = c.equipamento || "—";
+        contagem.set(nome, (contagem.get(nome) || 0) + 1);
+      });
+      const ordenado = Array.from(contagem.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      return { labels: ordenado.map(x => x[0]), valores: ordenado.map(x => x[1]) };
+    });
+
+    // ===== Gráfico 3: distribuição por prioridade (respeita todos os filtros) =====
+    const ORDEM_PRIORIDADE = ["Baixa", "Média", "Alta", "Crítica"];
+    const dadosPrioridade = computed(() => ({
+      labels: ORDEM_PRIORIDADE,
+      valores: ORDEM_PRIORIDADE.map(p => corretivasFiltradas.value.filter(c => c.prioridade === p).length),
+    }));
+
+    // ===== Tabela: disponibilidade por ativo =====
+    const linhasDisponibilidade = computed(() => {
+      return ativosFiltrados.value.map(ativo => {
+        const { programadas, noPrazo } = calcularAderencia([ativo], filtroAno.value, filtroMes.value);
+        const aderencia = programadas === 0 ? null : Math.round((noPrazo / programadas) * 100);
+
+        const corretivasAtivo = corretivasFiltradas.value.filter(c =>
+          normalizarTexto(c.equipamento) === normalizarTexto(ativo.nome) &&
+          (!c.area || !ativo.area || normalizarTexto(c.area) === normalizarTexto(ativo.area))
+        );
+        const mttrAtivo = mttrDeLista(corretivasAtivo);
+
+        let status;
+        if (corretivasAtivo.some(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status))) {
+          status = { label: "🔴 Crítico", cls: "bg-red-100 text-red-700" };
+        } else if (aderencia !== null && aderencia < 70) {
+          status = { label: "🟠 Atenção", cls: "bg-orange-100 text-orange-700" };
+        } else if (corretivasAtivo.length >= 3) {
+          status = { label: "🟡 Instável", cls: "bg-amber-100 text-amber-700" };
+        } else {
+          status = { label: "🟢 Disponível", cls: "bg-emerald-100 text-emerald-700" };
+        }
+
+        return {
+          chave: ativo.chave, idDisplay: ativo.idDisplay || ativo.tag || "—", nome: ativo.nome, area: ativo.area,
+          aderencia, chamados: corretivasAtivo.length, mttr: mttrAtivo, status,
+        };
+      }).sort((a, b) => b.chamados - a.chamados);
+    });
+
+    // ===== Chart.js: criação/destruição dos 3 gráficos =====
+    const canvasMensalRef = ref(null);
+    const canvasTop5Ref = ref(null);
+    const canvasPrioridadeRef = ref(null);
+    let chartMensal = null, chartTop5 = null, chartPrioridade = null;
+
+    function destruirGraficos() {
+      if (chartMensal) { chartMensal.destroy(); chartMensal = null; }
+      if (chartTop5) { chartTop5.destroy(); chartTop5 = null; }
+      if (chartPrioridade) { chartPrioridade.destroy(); chartPrioridade = null; }
+    }
+
+    // Sempre destrói antes de recriar — evita sobreposição de canvas ao
+    // trocar de filtro (o Chart.js não substitui sozinho um chart existente
+    // no mesmo elemento <canvas>).
+    function renderGraficos() {
+      if (typeof Chart === "undefined") return;
+      destruirGraficos();
+
+      if (canvasMensalRef.value) {
+        const d = dadosGraficoMensal.value;
+        chartMensal = new Chart(canvasMensalRef.value, {
+          type: "line",
+          data: {
+            labels: d.labels,
+            datasets: [
+              { label: "Preventivas Concluídas", data: d.preventivasPorMes, borderColor: CORES_DASHBOARD.preventiva, backgroundColor: CORES_DASHBOARD.preventiva, tension: 0.3, pointRadius: 3 },
+              { label: "Corretivas Abertas", data: d.corretivasPorMes, borderColor: CORES_DASHBOARD.corretiva, backgroundColor: CORES_DASHBOARD.corretiva, tension: 0.3, pointRadius: 3 },
+            ],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          },
+        });
+      }
+
+      if (canvasTop5Ref.value) {
+        const d = dadosTop5Equipamentos.value;
+        chartTop5 = new Chart(canvasTop5Ref.value, {
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Intervenções", data: d.valores, backgroundColor: CORES_DASHBOARD.barra, borderRadius: 4 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          },
+        });
+      }
+
+      if (canvasPrioridadeRef.value) {
+        const d = dadosPrioridade.value;
+        chartPrioridade = new Chart(canvasPrioridadeRef.value, {
+          type: "doughnut",
+          data: { labels: d.labels, datasets: [{ data: d.valores, backgroundColor: CORES_DASHBOARD.prioridade }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } } },
+        });
+      }
+    }
+
+    // Qualquer mudança nos dados dos gráficos (filtros ou nova carga de
+    // dados) recria os 3 gráficos automaticamente.
+    watch([dadosGraficoMensal, dadosTop5Equipamentos, dadosPrioridade], () => {
+      nextTick(renderGraficos);
     });
 
     function formatarHoras(h) {
-      if (h === null) return "—";
+      if (h === null || h === undefined) return "—";
       return h < 24 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d";
     }
-
-    function formatarData(iso) {
-      if (!iso) return "-";
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
-      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    function formatarPercentual(v) {
+      return v === null || v === undefined ? "—" : v + "%";
     }
 
-    onMounted(carregar);
+    onMounted(async () => {
+      await carregar();
+      nextTick(renderGraficos);
+    });
+    onUnmounted(destruirGraficos);
 
-    return { loading, erro, conformidade, mtbf, mttr, historico, formatarHoras, formatarData, carregar };
+    return {
+      loading, erro, carregar, areas, meses,
+      filtroAno, filtroMes, filtroArea, anosDisponiveis,
+      taxaConformidade, aderenciaPlano, mttr, mtbf,
+      canvasMensalRef, canvasTop5Ref, canvasPrioridadeRef,
+      linhasDisponibilidade, formatarHoras, formatarPercentual,
+    };
   },
   template: `
   <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <select v-model="filtroMes" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="todos">Mês: Todos</option>
+          <option v-for="m in meses" :key="m.v" :value="m.v">{{ m.l }}</option>
+        </select>
+        <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 col-span-2 sm:col-span-1">
+          <option value="todas">Setor: Todos</option>
+          <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <button @click="carregar" :disabled="loading"
+          class="btn-tap flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold rounded-lg text-sm">
+          <span v-if="loading" class="spinner"></span>
+          <span>{{ loading ? "Atualizando..." : "🔄 Atualizar Dados" }}</span>
+        </button>
+      </div>
+    </div>
+
     <div v-if="loading" class="flex justify-center py-12 text-slate-400">
       <span class="spinner !border-slate-300 !border-t-sky-600"></span>
     </div>
     <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
     <template v-else>
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <p class="text-xs text-slate-400 font-semibold uppercase">Conformidade</p>
-          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ conformidade === null ? "—" : conformidade + "%" }}</p>
+          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ formatarPercentual(taxaConformidade) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Itens conformes / avaliados</p>
         </div>
         <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">MTBF</p>
-          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarHoras(mtbf) }}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Tempo médio entre falhas</p>
+          <p class="text-xs text-slate-400 font-semibold uppercase">Aderência ao Plano</p>
+          <p class="text-3xl font-extrabold text-indigo-600 mt-1">{{ formatarPercentual(aderenciaPlano) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Executadas no prazo / programadas</p>
         </div>
         <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <p class="text-xs text-slate-400 font-semibold uppercase">MTTR</p>
           <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ formatarHoras(mttr) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Tempo médio de reparo</p>
         </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">MTBF (estimado)</p>
+          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarHoras(mtbf) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Horas de operação / corretivas</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
+          <h3 class="font-bold text-slate-700 mb-3">Histórico Mensal — Preventivas Concluídas x Corretivas Abertas</h3>
+          <div style="height: 260px">
+            <canvas ref="canvasMensalRef"></canvas>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Top 5 Equipamentos — Mais Intervenções Corretivas</h3>
+          <div style="height: 240px">
+            <canvas ref="canvasTop5Ref"></canvas>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Corretivas por Grau de Prioridade</h3>
+          <div style="height: 240px">
+            <canvas ref="canvasPrioridadeRef"></canvas>
+          </div>
+        </div>
       </div>
 
       <div>
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="font-bold text-slate-700">Histórico de Intervenções</h3>
-          <button @click="carregar" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
+        <h3 class="font-bold text-slate-700 mb-3">Disponibilidade por Ativo</h3>
+        <div v-if="linhasDisponibilidade.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum ativo cadastrado para este filtro.
         </div>
-        <div v-if="historico.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-          Nenhum registro encontrado.
-        </div>
-        <div v-else class="space-y-2">
-          <div v-for="(h, idx) in historico" :key="idx" class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex items-center justify-between gap-2">
-            <div class="min-w-0">
-              <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded mr-2"
-                :class="h.tipo === 'Preventiva' ? 'bg-sky-100 text-sky-700' : 'bg-orange-100 text-orange-700'">{{ h.tipo }}</span>
-              <span class="font-semibold text-slate-800">{{ h.titulo }}</span>
-            </div>
-            <span class="text-xs text-slate-400 whitespace-nowrap">{{ formatarData(h.data) }}</span>
-          </div>
+        <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table class="text-sm w-full border-collapse">
+            <thead>
+              <tr class="bg-slate-800 text-white text-xs">
+                <th class="px-3 py-2 text-left whitespace-nowrap">Ativo / Tag</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Setor</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Aderência Preventiva</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Chamados Corretivos</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">MTTR</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Status de Disponibilidade</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="l in linhasDisponibilidade" :key="l.chave" class="border-t border-slate-100">
+                <td class="px-3 py-2 text-slate-700">
+                  <span class="text-slate-400 font-mono text-xs mr-1">[{{ l.idDisplay }}]</span>{{ l.nome }}
+                </td>
+                <td class="px-3 py-2 text-slate-500 whitespace-nowrap">{{ l.area || "—" }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ formatarPercentual(l.aderencia) }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ l.chamados }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">{{ formatarHoras(l.mttr) }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="l.status.cls">{{ l.status.label }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </template>
