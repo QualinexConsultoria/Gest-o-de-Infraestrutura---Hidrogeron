@@ -53,6 +53,26 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxeM7DmvSrJW_uzm30LRwZs
 const STORAGE_USER_KEY = "hidrogeron_user";
 
 const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidráulica", "Oficina", "Tecnologia da Informação"];
+
+// Hardening: os seletores de Setor/Área nunca dependem só da lista estática
+// acima — cada módulo une AREAS aos valores de área realmente presentes nos
+// equipamentos carregados (comparação sem acento/maiúscula via
+// normalizarTexto), preservando a ordem de AREAS e acrescentando ao final
+// qualquer setor novo que a planilha já tenha cadastrado mas que ainda não
+// tenha sido adicionado a esta constante.
+function unirAreas(listaEquipamentos) {
+  const resultado = AREAS.slice();
+  const vistos = new Set(AREAS.map(a => normalizarTexto(a)));
+  (listaEquipamentos || []).forEach(eq => {
+    const area = (eq && (eq.area || eq.Area) || "").trim();
+    if (!area) return;
+    const chave = normalizarTexto(area);
+    if (vistos.has(chave)) return;
+    vistos.add(chave);
+    resultado.push(area);
+  });
+  return resultado;
+}
 const PRIORIDADES = [
   { value: "Baixa",   color: "bg-blue-100 text-blue-700 border-blue-300" },
   { value: "Média",   color: "bg-yellow-100 text-yellow-700 border-yellow-300" },
@@ -556,6 +576,30 @@ const ITENS_INSPECAO_TI = {
 };
 function itensInspecaoTI(nomeAtivo) {
   return ITENS_INSPECAO_TI[normalizarTexto(nomeAtivo)] || null;
+}
+
+// Hardening: os 3 ativos de TI SEMPRE aparecem na listagem de equipamentos e
+// nos seletores de Preventiva/Corretiva, mesmo que a planilha ainda não
+// tenha propagado essas linhas (ou demore a responder). A cada carregamento,
+// comFallbackEquipamentosTI injeta apenas os ativos que estiverem realmente
+// ausentes (comparando por nome) no array bruto vindo do backend — assim que
+// a planilha realmente trouxer essas linhas, a injeção some sozinha, sem
+// duplicar cards.
+const EQUIPAMENTOS_TI_FALLBACK = [
+  { ID: "EQ-TI-01", Nome: "Servidor Central", Area: AREA_TI, Modelo: "Hardware / Sistema", Periodicidade: "Mensal" },
+  { ID: "EQ-TI-02", Nome: "Terminais de Trabalho", Area: AREA_TI, Modelo: "Software / SO", Periodicidade: "Mensal" },
+  { ID: "EQ-TI-03", Nome: "Servidor em Nuvem (OneDrive)", Area: AREA_TI, Modelo: "Cloud Storage / M365", Periodicidade: "Mensal" },
+].map(eq => ({ ...eq, Itens_Inspecao_Recomendados: (itensInspecaoTI(eq.Nome) || []).join(", ") }));
+
+function comFallbackEquipamentosTI(rawEquip) {
+  const lista = Array.isArray(rawEquip) ? rawEquip.slice() : [];
+  const nomesExistentes = new Set(
+    lista.map(e => normalizarTexto(e.Nome || e.Equipamento || e.nome || e.equipamento || ""))
+  );
+  EQUIPAMENTOS_TI_FALLBACK.forEach(fallback => {
+    if (!nomesExistentes.has(normalizarTexto(fallback.Nome))) lista.push(fallback);
+  });
+  return lista;
 }
 
 const MESES_PT = [
@@ -1091,10 +1135,10 @@ const PreventivaModule = {
   emits: ["go-home"],
   components: { LaudoPreventivaModal, AssinaturaCanvas },
   setup(props, { emit }) {
-    const areas = AREAS;
     const meses = MESES_PT;
 
     const todosEquipamentos = ref([]);
+    const areas = computed(() => unirAreas(todosEquipamentos.value));
     const preventivasHistorico = ref([]);
     const loadingDados = ref(false);
     const erroCarregamento = ref("");
@@ -1155,7 +1199,7 @@ const PreventivaModule = {
       }
       try {
         const data = await getInitialData();
-        const todos = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        const todos = comFallbackEquipamentosTI(data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || []);
         todosEquipamentos.value = todos.map(e => ({
           id: e.ID || e.Id || e.id || uid(),
           idDisplay: e.ID || e.Id || e.id || "",
@@ -1399,7 +1443,7 @@ const PreventivaModule = {
     // Cards do nível "Setores": total de ATIVOS (já unificados) e pendências
     // por área (vencidos ou não conformes contam como pendência que exige ação).
     const statsPorArea = computed(() => {
-      return areas.map(a => {
+      return areas.value.map(a => {
         const lista = ativosDaArea(a);
         const pendentes = lista.filter(ativo => {
           const tipo = statusCicloEquipamento(ativo).tipo;
@@ -2708,10 +2752,9 @@ const CorretivaModule = {
   props: { user: Object },
   components: { AssinaturaCanvas, LaudoCorretivaModal },
   setup(props) {
-    const areas = AREAS;
     const prioridades = PRIORIDADES;
     const form = reactive({
-      area: areas[0],
+      area: AREAS[0],
       equipamento: "",
       prioridade: "Média",
       descricao: "",
@@ -2763,6 +2806,7 @@ const CorretivaModule = {
 
     // Cadastro de Equipamentos (só para consulta de ID/Modelo no laudo RSG-6302-02).
     const todosEquipamentosCorretiva = ref([]);
+    const areas = computed(() => unirAreas(todosEquipamentosCorretiva.value));
     function equipamentoInfo(nome, area) {
       const nomeAlvo = normalizarTexto(nome);
       const areaAlvo = normalizarTexto(area);
@@ -2873,7 +2917,7 @@ const CorretivaModule = {
           .sort((a, b) => new Date(b.dataConclusao || b.data) - new Date(a.dataConclusao || a.data));
 
         const rawEquipData = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
-        const rawEquip = Array.isArray(rawEquipData) ? rawEquipData : [];
+        const rawEquip = comFallbackEquipamentosTI(Array.isArray(rawEquipData) ? rawEquipData : []);
         todosEquipamentosCorretiva.value = rawEquip.map(e => ({
           idDisplay: e.ID || e.id || e.Tag || e.TAG || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
@@ -3781,7 +3825,7 @@ const DashboardModule = {
     const preventivas = ref([]);
     const corretivas = ref([]);
     const todosEquipamentos = ref([]);
-    const areas = AREAS;
+    const areas = computed(() => unirAreas(todosEquipamentos.value));
     const meses = MESES_PT;
 
     const ANO_ATUAL_DASH = new Date().getFullYear();
@@ -3800,7 +3844,7 @@ const DashboardModule = {
         const data = await getInitialData();
         preventivas.value = extractPreventivas(data);
         corretivas.value = extractCorretivas(data);
-        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        const rawEquip = comFallbackEquipamentosTI(data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || []);
         todosEquipamentos.value = (Array.isArray(rawEquip) ? rawEquip : []).map(e => ({
           idDisplay: e.ID || e.Id || e.id || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
@@ -3980,7 +4024,7 @@ const DashboardModule = {
     // Ignora o filtro de setor de propósito — o objetivo do gráfico é
     // comparar setores entre si para destacar os mais críticos.
     const dadosConformidadePorSetor = computed(() => {
-      const linhas = areas.map(area => {
+      const linhas = areas.value.map(area => {
         const lista = preventivas.value.filter(p => noPeriodo(p.data) && normalizarTexto(p.area) === normalizarTexto(area));
         const pct = lista.length === 0 ? 100 : Math.round((lista.filter(p => p.status === "C").length / lista.length) * 100);
         return { area, pct };
@@ -4412,7 +4456,7 @@ const IndicadoresModule = {
     const preventivas = ref([]);
     const corretivas = ref([]);
     const todosEquipamentos = ref([]);
-    const areas = AREAS;
+    const areas = computed(() => unirAreas(todosEquipamentos.value));
     const meses = MESES_PT;
 
     const ANO_ATUAL_IND = new Date().getFullYear();
@@ -4434,7 +4478,7 @@ const IndicadoresModule = {
         const data = await getInitialData();
         preventivas.value = extractPreventivas(data);
         corretivas.value = extractCorretivas(data);
-        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        const rawEquip = comFallbackEquipamentosTI(data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || []);
         todosEquipamentos.value = (Array.isArray(rawEquip) ? rawEquip : []).map(e => ({
           idDisplay: e.ID || e.Id || e.id || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
