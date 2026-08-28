@@ -617,6 +617,48 @@ function isAdmin(user) {
   return normalizarTexto(user && user.perfil) === "administrador";
 }
 
+// Extrai Ano/Mês de qualquer registro (Preventivas e Corretivas) direto da
+// string, sem passar por `new Date(string)`. Datas "puras" (sem hora, ex:
+// "2026-01-01") são tratadas pelo motor de JS como UTC — em fusos horários
+// negativos (ex: Brasil, UTC-3) isso pode deslocar o dia para o mês/ano
+// anterior (31/12/2025 às 21h) e quebrar o filtro por mês/ano no Indicadores.
+// Suporta "YYYY-MM-DD...", "YYYY-MM-DD HH:mm" e "DD/MM/YYYY".
+function extrairAnoMes(strData) {
+  if (!strData) return { ano: null, mes: null };
+  const s = String(strData).trim();
+  if (s.includes("-")) {
+    const partes = s.split("-");
+    return { ano: parseInt(partes[0], 10), mes: parseInt(partes[1], 10) }; // mês 1 a 12
+  } else if (s.includes("/")) {
+    const partes = s.split("/");
+    return { ano: parseInt(partes[2], 10), mes: parseInt(partes[1], 10) };
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? { ano: null, mes: null } : { ano: d.getFullYear(), mes: d.getMonth() + 1 };
+}
+
+// Parser de data/hora robusto a fuso: monta o Date com os componentes
+// numéricos extraídos da própria string (ano, mês, dia, hora, minuto) em vez
+// de delegar a string inteira a `new Date(string)` — mesma razão de
+// extrairAnoMes, mas preservando hora/minuto para cálculos de duração
+// (MTTR) e comparação com o prazo (3ª quinta-feira).
+function parseDataHoraLocal(strData) {
+  if (!strData) return null;
+  const s = String(strData).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (m) {
+    const d = new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 /* ==========================================================================
    UPLOAD MISTO (fotos + documentos) — Corretiva, abertura de chamado
    ========================================================================== */
@@ -3799,9 +3841,11 @@ const IndicadoresModule = {
     const filtroMes = ref("todos"); // 'todos' | 1-12
     const filtroArea = ref("todas");
 
+    // Parse robusto a fuso (ver parseDataHoraLocal/extrairAnoMes globais):
+    // evita o deslocamento de dia/mês/ano que `new Date(string)` sofre com
+    // datas "puras" (sem hora) em fusos negativos.
     function parseData(v) {
-      const d = new Date(v);
-      return isNaN(d.getTime()) ? null : d;
+      return parseDataHoraLocal(v);
     }
 
     async function carregar() {
@@ -3834,19 +3878,21 @@ const IndicadoresModule = {
     // (garante que o filtro sempre tenha pelo menos o ano corrente, mesmo sem histórico).
     const anosDisponiveis = computed(() => {
       const anos = new Set([ANO_ATUAL_IND]);
-      preventivas.value.forEach(p => { const d = parseData(p.data); if (d) anos.add(d.getFullYear()); });
-      corretivas.value.forEach(c => { const d = parseData(c.data); if (d) anos.add(d.getFullYear()); });
+      preventivas.value.forEach(p => { const { ano } = extrairAnoMes(p.data); if (ano) anos.add(ano); });
+      corretivas.value.forEach(c => { const { ano } = extrairAnoMes(c.data); if (ano) anos.add(ano); });
       return Array.from(anos).sort((a, b) => b - a);
     });
 
     function areaOk(area) {
       return filtroArea.value === "todas" || normalizarTexto(area) === normalizarTexto(filtroArea.value);
     }
+    // Filtro por ano/mês via extrairAnoMes (string), não via new Date(...) —
+    // é o ponto que quebrava meses/anos passados por deslocamento de fuso.
     function noPeriodo(dataStr) {
-      const d = parseData(dataStr);
-      if (!d) return false;
-      if (d.getFullYear() !== filtroAno.value) return false;
-      if (filtroMes.value !== "todos" && d.getMonth() + 1 !== Number(filtroMes.value)) return false;
+      const { ano, mes } = extrairAnoMes(dataStr);
+      if (ano === null) return false;
+      if (ano !== filtroAno.value) return false;
+      if (filtroMes.value !== "todos" && mes !== Number(filtroMes.value)) return false;
       return true;
     }
 
@@ -3888,11 +3934,12 @@ const IndicadoresModule = {
             programadas++;
             const planejada = getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
             const executadaNoPrazo = preventivas.value.some(p => {
-              const d = parseData(p.data);
-              if (!d || d.getFullYear() !== ano || d.getMonth() + 1 !== mes) return false;
+              const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
+              if (anoLog !== ano || mesLog !== mes) return false;
               if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
               if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
-              return d.getTime() <= planejada;
+              const d = parseData(p.data);
+              return d && d.getTime() <= planejada;
             });
             if (executadaNoPrazo) noPrazo++;
           });
@@ -3902,25 +3949,31 @@ const IndicadoresModule = {
     }
 
     // ===== Card 1: Taxa de Conformidade =====
+    // Sem itens avaliados no período (mês sem nenhum registro) não há como
+    // apurar não-conformidade nenhuma: assume-se 100% em vez de "—"/NaN.
     const taxaConformidade = computed(() => {
       const lista = preventivasFiltradas.value;
-      if (lista.length === 0) return null;
+      if (lista.length === 0) return 100;
       const conformes = lista.filter(p => p.status === "C").length;
       return Math.round((conformes / lista.length) * 100);
     });
 
     // ===== Card 2: Aderência ao Plano =====
+    // Sem nenhum ciclo programado no período (nenhum ativo com periodicidade
+    // cadastrada cai naquele mês), não há plano a descumprir: 100%.
     const aderenciaPlano = computed(() => {
       const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMes.value);
-      return programadas === 0 ? null : Math.round((noPrazo / programadas) * 100);
+      return programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
     });
 
     // ===== Card 3: MTTR =====
+    // Sem chamados fechados no período, o tempo médio de reparo é 0 (não há
+    // divisão por zero nem "—" enganoso — zero paradas resolvidas = 0h).
     function mttrDeLista(lista) {
       const pares = lista
         .map(c => ({ abertura: parseData(c.data), conclusao: parseData(c.dataConclusao) }))
         .filter(p => p.abertura && p.conclusao && p.conclusao >= p.abertura);
-      if (pares.length === 0) return null;
+      if (pares.length === 0) return 0;
       const totalMs = pares.reduce((acc, p) => acc + (p.conclusao - p.abertura), 0);
       return totalMs / pares.length / 36e5; // horas
     }
@@ -3930,7 +3983,9 @@ const IndicadoresModule = {
     // Horas de operação estimadas no período (dias do período x 24h) divididas
     // pelo número de corretivas abertas — não há apontamento real de uptime
     // por ativo no sistema, então o período filtrado é usado como proxy do
-    // "tempo em operação" a ser dividido pelas falhas ocorridas nele.
+    // "tempo em operação" a ser dividido pelas falhas ocorridas nele. Sem
+    // nenhuma corretiva no período (divisão por zero), não há falha alguma
+    // registrada: exibido como "100% Confiável" em vez de calcular um MTBF.
     function diasNoPeriodo(ano, mesFiltro) {
       if (mesFiltro === "todos") {
         const bissexto = (ano % 4 === 0 && ano % 100 !== 0) || ano % 400 === 0;
@@ -3940,9 +3995,9 @@ const IndicadoresModule = {
     }
     const mtbf = computed(() => {
       const qtd = corretivasFiltradas.value.length;
-      if (qtd === 0) return null;
       const horasOperacao = diasNoPeriodo(filtroAno.value, filtroMes.value) * 24;
-      return horasOperacao / qtd;
+      if (qtd === 0) return { confiavel: true, horas: horasOperacao };
+      return { confiavel: false, horas: horasOperacao / qtd };
     });
 
     // ===== Gráfico 1: histórico mensal (ano inteiro, respeita só o filtro de setor) =====
@@ -3952,15 +4007,15 @@ const IndicadoresModule = {
       const corretivasPorMes = new Array(12).fill(0);
       preventivas.value.forEach(p => {
         if (!areaOk(p.area)) return;
-        const d = parseData(p.data);
-        if (!d || d.getFullYear() !== ano) return;
-        preventivasPorMes[d.getMonth()]++;
+        const { ano: anoLog, mes } = extrairAnoMes(p.data);
+        if (anoLog !== ano || !mes) return;
+        preventivasPorMes[mes - 1]++;
       });
       corretivas.value.forEach(c => {
         if (!areaOk(c.area)) return;
-        const d = parseData(c.data);
-        if (!d || d.getFullYear() !== ano) return;
-        corretivasPorMes[d.getMonth()]++;
+        const { ano: anoLog, mes } = extrairAnoMes(c.data);
+        if (anoLog !== ano || !mes) return;
+        corretivasPorMes[mes - 1]++;
       });
       return { labels: meses.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
     });
@@ -3987,7 +4042,9 @@ const IndicadoresModule = {
     const linhasDisponibilidade = computed(() => {
       return ativosFiltrados.value.map(ativo => {
         const { programadas, noPrazo } = calcularAderencia([ativo], filtroAno.value, filtroMes.value);
-        const aderencia = programadas === 0 ? null : Math.round((noPrazo / programadas) * 100);
+        // Ativo sem ciclo programado no período (ex: periodicidade anual fora
+        // do mês filtrado) não tem plano a descumprir — 100%, não "—".
+        const aderencia = programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
 
         const corretivasAtivo = corretivasFiltradas.value.filter(c =>
           normalizarTexto(c.equipamento) === normalizarTexto(ativo.nome) &&
@@ -3995,15 +4052,22 @@ const IndicadoresModule = {
         );
         const mttrAtivo = mttrDeLista(corretivasAtivo);
 
+        // Ativo sem nenhuma intervenção corretiva no mês selecionado: sempre
+        // listado (nunca omitido) e sempre 🟢 100% Operacional.
+        // Status de Disponibilidade reflete apenas chamados corretivos
+        // (quebras) — a Aderência Preventiva já tem sua própria coluna
+        // numérica na tabela, não é reconsultada aqui. Um ativo sem nenhuma
+        // corretiva no período é sempre 🟢 100% Operacional, independente do
+        // resultado do plano preventivo.
         let status;
         if (corretivasAtivo.some(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status))) {
           status = { label: "🔴 Crítico", cls: "bg-red-100 text-red-700" };
-        } else if (aderencia !== null && aderencia < 70) {
-          status = { label: "🟠 Atenção", cls: "bg-orange-100 text-orange-700" };
         } else if (corretivasAtivo.length >= 3) {
           status = { label: "🟡 Instável", cls: "bg-amber-100 text-amber-700" };
+        } else if (corretivasAtivo.length > 0) {
+          status = { label: "🟠 Atenção", cls: "bg-orange-100 text-orange-700" };
         } else {
-          status = { label: "🟢 Disponível", cls: "bg-emerald-100 text-emerald-700" };
+          status = { label: "🟢 100% Operacional", cls: "bg-emerald-100 text-emerald-700" };
         }
 
         return {
@@ -4081,11 +4145,16 @@ const IndicadoresModule = {
     });
 
     function formatarHoras(h) {
-      if (h === null || h === undefined) return "—";
+      if (h === null || h === undefined || isNaN(h)) return "0h";
+      if (h === 0) return "0h";
       return h < 24 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d";
     }
     function formatarPercentual(v) {
-      return v === null || v === undefined ? "—" : v + "%";
+      return v === null || v === undefined || isNaN(v) ? "100%" : v + "%";
+    }
+    function formatarMtbf(m) {
+      if (!m) return "100% Confiável";
+      return m.confiavel ? "100% Confiável" : formatarHoras(m.horas);
     }
 
     onMounted(async () => {
@@ -4099,7 +4168,7 @@ const IndicadoresModule = {
       filtroAno, filtroMes, filtroArea, anosDisponiveis,
       taxaConformidade, aderenciaPlano, mttr, mtbf,
       canvasMensalRef, canvasTop5Ref, canvasPrioridadeRef,
-      linhasDisponibilidade, formatarHoras, formatarPercentual,
+      linhasDisponibilidade, formatarHoras, formatarPercentual, formatarMtbf,
     };
   },
   template: `
@@ -4148,7 +4217,7 @@ const IndicadoresModule = {
         </div>
         <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <p class="text-xs text-slate-400 font-semibold uppercase">MTBF (estimado)</p>
-          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarHoras(mtbf) }}</p>
+          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarMtbf(mtbf) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Horas de operação / corretivas</p>
         </div>
       </div>
