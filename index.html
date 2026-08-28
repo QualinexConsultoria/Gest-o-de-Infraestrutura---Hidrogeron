@@ -43,7 +43,7 @@
 <div id="app"></div>
 
 <script>
-const { createApp, ref, reactive, computed, onMounted, watch } = Vue;
+const { createApp, ref, reactive, computed, onMounted, watch, onErrorCaptured } = Vue;
 
 /* ==========================================================================
    CONFIGURAÇÃO
@@ -276,14 +276,14 @@ function normalizeCorretivaChamado(c) {
 }
 
 function extractPreventivas(data) {
-  const raw = data.preventivas || data.Preventivas || (data.data && data.data.preventivas) || [];
-  return raw.map(normalizePreventivaLog);
+  const raw = (data && (data.preventivas || data.Preventivas || (data.data && data.data.preventivas))) || [];
+  return (Array.isArray(raw) ? raw : []).map(normalizePreventivaLog);
 }
 
 function extractCorretivas(data) {
-  const raw = data.chamados || data.Chamados || data.corretivas || data.Corretivas
-    || (data.data && (data.data.chamados || data.data.corretivas)) || [];
-  return raw.map(normalizeCorretivaChamado);
+  const raw = (data && (data.chamados || data.Chamados || data.corretivas || data.Corretivas
+    || (data.data && (data.data.chamados || data.data.corretivas)))) || [];
+  return (Array.isArray(raw) ? raw : []).map(normalizeCorretivaChamado);
 }
 
 function isStatusChamadoAberto(status) {
@@ -2508,6 +2508,32 @@ const CorretivaModule = {
     const erroChamados = ref("");
     const aba = ref("abertos"); // 'abertos' | 'encerrados' | 'calendario'
 
+    // ===== Filtros da listagem (busca, área, status, prioridade) =====
+    const filtroBuscaCorretiva = ref("");
+    const filtroAreaCorretiva = ref("todas");
+    const filtroStatusCorretiva = ref("todos"); // 'todos' | 'aberto' | 'fechado'
+    const filtroPrioridadeCorretiva = ref("todas");
+    function limparFiltrosCorretiva() {
+      filtroBuscaCorretiva.value = "";
+      filtroAreaCorretiva.value = "todas";
+      filtroStatusCorretiva.value = "todos";
+      filtroPrioridadeCorretiva.value = "todas";
+    }
+    function aplicarFiltrosCorretiva(lista) {
+      const termo = filtroBuscaCorretiva.value.trim().toLowerCase();
+      return (lista || []).filter(c => {
+        if (filtroAreaCorretiva.value !== "todas" && normalizarTexto(c.area) !== normalizarTexto(filtroAreaCorretiva.value)) return false;
+        if (filtroPrioridadeCorretiva.value !== "todas" && c.prioridade !== filtroPrioridadeCorretiva.value) return false;
+        if (filtroStatusCorretiva.value === "aberto" && !isStatusChamadoAberto(c.status)) return false;
+        if (filtroStatusCorretiva.value === "fechado" && isStatusChamadoAberto(c.status)) return false;
+        if (termo) {
+          const alvo = `${c.equipamento || ""} ${c.id || ""} ${c.solicitante || ""}`.toLowerCase();
+          if (!alvo.includes(termo)) return false;
+        }
+        return true;
+      });
+    }
+
     // ===== Calendário de Corretivas =====
     const ANO_ATUAL_CORRETIVA = new Date().getFullYear();
     const calendarioCorretivaArea = ref("todas");
@@ -2631,7 +2657,8 @@ const CorretivaModule = {
           .filter(c => !isStatusChamadoAberto(c.status))
           .sort((a, b) => new Date(b.dataConclusao || b.data) - new Date(a.dataConclusao || a.data));
 
-        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        const rawEquipData = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        const rawEquip = Array.isArray(rawEquipData) ? rawEquipData : [];
         todosEquipamentosCorretiva.value = rawEquip.map(e => ({
           idDisplay: e.ID || e.id || e.Tag || e.TAG || "",
           nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
@@ -2971,6 +2998,9 @@ const CorretivaModule = {
       return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
     }
 
+    const chamadosFiltrados = computed(() => aplicarFiltrosCorretiva(chamados.value));
+    const chamadosEncerradosFiltrados = computed(() => aplicarFiltrosCorretiva(chamadosEncerrados.value));
+
     // Todos os chamados (abertos + encerrados), filtrados pelo setor do
     // Calendário — base de todas as contagens e da tabela filtrada abaixo.
     const todosChamadosCalendario = computed(() => {
@@ -3040,6 +3070,8 @@ const CorretivaModule = {
     return {
       areas, prioridades, form, enviando, abrirChamado,
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
+      chamadosFiltrados, chamadosEncerradosFiltrados,
+      filtroBuscaCorretiva, filtroAreaCorretiva, filtroStatusCorretiva, filtroPrioridadeCorretiva, limparFiltrosCorretiva,
       modalAberto, chamadoSelecionado, diagnosticoTexto, resolucaoTexto, pecasTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
       inputCameraConclusaoRef, inputGaleriaConclusaoRef,
       anexosAbertura, inputAnexoUniversalRef, enviandoAnexo, anexoZoomAtivo,
@@ -3122,7 +3154,7 @@ const CorretivaModule = {
       <button @click="abrirChamado" :disabled="enviando"
         class="btn-tap w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md">
         <span v-if="enviando" class="spinner"></span>
-        <span>{{ enviando ? "Enviando..." : "Abrir Chamado" }}</span>
+        <span>{{ enviando ? "Enviando..." : "+ Abrir Novo Chamado Corretivo" }}</span>
       </button>
     </div>
 
@@ -3145,6 +3177,27 @@ const CorretivaModule = {
         <button @click="carregarChamados" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
       </div>
 
+      <div v-if="aba !== 'calendario'" class="bg-white rounded-xl border border-slate-200 p-3 mb-3 space-y-2">
+        <input v-model="filtroBuscaCorretiva" type="text" placeholder="Buscar por equipamento, ID ou solicitante..."
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <div class="grid grid-cols-3 gap-2">
+          <select v-model="filtroAreaCorretiva" class="rounded-lg border border-slate-300 px-2 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Setor: Todos</option>
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <select v-model="filtroStatusCorretiva" class="rounded-lg border border-slate-300 px-2 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todos">Status: Todos</option>
+            <option value="aberto">Aberto</option>
+            <option value="fechado">Fechado</option>
+          </select>
+          <select v-model="filtroPrioridadeCorretiva" class="rounded-lg border border-slate-300 px-2 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Prioridade: Todas</option>
+            <option v-for="p in prioridades" :key="p.value" :value="p.value">{{ p.value }}</option>
+          </select>
+        </div>
+        <button @click="limparFiltrosCorretiva" class="text-sky-600 text-xs font-semibold btn-tap">✕ Limpar Filtros</button>
+      </div>
+
       <div v-if="loadingChamados" class="flex justify-center py-8 text-slate-400">
         <span class="spinner !border-slate-300 !border-t-sky-600"></span>
       </div>
@@ -3153,11 +3206,11 @@ const CorretivaModule = {
       </div>
 
       <template v-else-if="aba === 'abertos'">
-        <div v-if="chamados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-          Nenhum chamado aberto no momento. 🎉
+        <div v-if="chamadosFiltrados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          {{ chamados.length === 0 ? "Nenhum chamado aberto no momento. 🎉" : "Nenhum chamado corresponde aos filtros." }}
         </div>
         <div v-else class="space-y-3">
-          <div v-for="c in chamados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <div v-for="c in chamadosFiltrados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
             <div class="flex items-start justify-between gap-2 mb-2">
               <div class="flex items-start gap-2 min-w-0">
                 <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
@@ -3205,12 +3258,12 @@ const CorretivaModule = {
         </div>
       </template>
 
-      <template v-else>
-        <div v-if="chamadosEncerrados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-          Nenhum chamado encerrado ainda.
+      <template v-else-if="aba === 'encerrados'">
+        <div v-if="chamadosEncerradosFiltrados.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          {{ chamadosEncerrados.length === 0 ? "Nenhum chamado encerrado ainda." : "Nenhum chamado corresponde aos filtros." }}
         </div>
         <div v-else class="space-y-3">
-          <div v-for="c in chamadosEncerrados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm opacity-90">
+          <div v-for="c in chamadosEncerradosFiltrados" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm opacity-90">
             <div class="flex items-start justify-between gap-2 mb-2">
               <div class="flex items-start gap-2 min-w-0">
                 <span class="text-xs font-bold text-slate-400 font-mono shrink-0 mt-0.5">#{{ c.id }}</span>
@@ -3853,6 +3906,20 @@ const App = {
     const user = ref(null);
     const currentView = ref("home");
 
+    // Blindagem contra tela em branco: qualquer erro de renderização/lifecycle
+    // não tratado num módulo (ex: propriedade undefined vinda da planilha) é
+    // capturado aqui em vez de derrubar a árvore inteira do Vue.
+    const erroRenderizacao = ref(null);
+    onErrorCaptured((err, instance, info) => {
+      console.error("Erro de renderização capturado:", err, info);
+      erroRenderizacao.value = (err && err.message) || "Erro inesperado ao carregar esta tela.";
+      return false;
+    });
+    function tentarNovamenteRenderizacao() {
+      erroRenderizacao.value = null;
+      currentView.value = "home";
+    }
+
     onMounted(() => {
       try {
         const stored = localStorage.getItem(STORAGE_USER_KEY);
@@ -3875,10 +3942,12 @@ const App = {
     }
 
     function irParaHome() {
+      erroRenderizacao.value = null;
       currentView.value = "home";
     }
 
     function navigate(view) {
+      erroRenderizacao.value = null;
       currentView.value = view;
     }
 
@@ -3899,6 +3968,7 @@ const App = {
 
     return {
       user, currentView, handleLoginSuccess, logout, irParaHome, navigate, currentTitle, cargoBadgeClass,
+      erroRenderizacao, tentarNovamenteRenderizacao,
     };
   },
   template: `
@@ -3955,7 +4025,15 @@ const App = {
       </div>
 
       <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
-        <transition name="fade" mode="out-in">
+        <div v-if="erroRenderizacao" class="bg-red-50 border border-red-200 rounded-xl p-6 text-center space-y-3">
+          <p class="text-3xl">⚠️</p>
+          <p class="font-bold text-red-700">Não foi possível carregar esta tela</p>
+          <p class="text-sm text-red-600">{{ erroRenderizacao }}</p>
+          <button @click="tentarNovamenteRenderizacao" class="btn-tap bg-red-600 hover:bg-red-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm">
+            🏠 Voltar ao Início
+          </button>
+        </div>
+        <transition v-else name="fade" mode="out-in">
           <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" key="home"></home-hub>
           <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" @go-home="irParaHome" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
