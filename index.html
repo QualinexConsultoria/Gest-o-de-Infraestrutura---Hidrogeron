@@ -573,12 +573,16 @@ const ITENS_INSPECAO_TI = {
   [normalizarTexto("Servidor em Nuvem (OneDrive)")]: [
     "Sincronização e Integridade de Dados", "Permissões e Controle de Acessos", "Cota de Armazenamento", "Políticas de Retenção e Lixeira",
   ],
+  [normalizarTexto("Software Onqualit")]: [
+    "Disponibilidade e Acessibilidade do Sistema Onqualit", "Integridade da Base de Dados e Módulos do SGQ",
+    "Rotinas de Exportação / Backup de Segurança dos Registros", "Gestão de Licenças e Usuários Ativos",
+  ],
 };
 function itensInspecaoTI(nomeAtivo) {
   return ITENS_INSPECAO_TI[normalizarTexto(nomeAtivo)] || null;
 }
 
-// Hardening: os 3 ativos de TI SEMPRE aparecem na listagem de equipamentos e
+// Hardening: os ativos de TI SEMPRE aparecem na listagem de equipamentos e
 // nos seletores de Preventiva/Corretiva, mesmo que a planilha ainda não
 // tenha propagado essas linhas (ou demore a responder). A cada carregamento,
 // comFallbackEquipamentosTI injeta apenas os ativos que estiverem realmente
@@ -589,6 +593,7 @@ const EQUIPAMENTOS_TI_FALLBACK = [
   { ID: "EQ-TI-01", Nome: "Servidor Central", Area: AREA_TI, Modelo: "Hardware / Sistema", Periodicidade: "Mensal" },
   { ID: "EQ-TI-02", Nome: "Terminais de Trabalho", Area: AREA_TI, Modelo: "Software / SO", Periodicidade: "Mensal" },
   { ID: "EQ-TI-03", Nome: "Servidor em Nuvem (OneDrive)", Area: AREA_TI, Modelo: "Cloud Storage / M365", Periodicidade: "Mensal" },
+  { ID: "EQ-TI-04", Nome: "Software Onqualit", Area: AREA_TI, Modelo: "Sistema de Gestão da Qualidade (SaaS / Web)", Periodicidade: "Mensal" },
 ].map(eq => ({ ...eq, Itens_Inspecao_Recomendados: (itensInspecaoTI(eq.Nome) || []).join(", ") }));
 
 function comFallbackEquipamentosTI(rawEquip) {
