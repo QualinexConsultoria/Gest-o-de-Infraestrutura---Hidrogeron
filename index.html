@@ -3590,52 +3590,35 @@ const CorretivaModule = {
 };
 
 /* ==========================================================================
-   MÓDULO DASHBOARD / HISTÓRICO
+   MÓDULO DASHBOARD GERAL — Cockpit Integrado de Confiabilidade e Saúde da Planta
    ========================================================================== */
+const CORES_COCKPIT = {
+  preventiva: "#10b981",  // emerald-500
+  corretiva: "#ef4444",   // red-500
+  setorRuim: "#dc2626", setorMedio: "#f59e0b", setorBom: "#10b981",
+  downtime: "#f97316",    // orange-500
+  status: ["#10b981", "#f59e0b", "#ef4444"], // operacional / alerta / indisponível
+};
+
 const DashboardModule = {
-  setup() {
+  emits: ["navigate"],
+  setup(props, { emit }) {
     const loading = ref(true);
     const erro = ref("");
     const preventivas = ref([]);
     const corretivas = ref([]);
-    const filtroTipo = ref("todos");
+    const todosEquipamentos = ref([]);
+    const areas = AREAS;
+    const meses = MESES_PT;
 
-    const stats = computed(() => {
-      const abertos = corretivas.value.filter(c => isStatusChamadoAberto(c.status)).length;
-      const criticos = corretivas.value.filter(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status)).length;
-      const naoConformes = preventivas.value.filter(p => p.status === "NC").length;
-      return {
-        totalPreventivas: preventivas.value.length,
-        totalCorretivas: corretivas.value.length,
-        abertos,
-        criticos,
-        naoConformes,
-      };
-    });
+    const ANO_ATUAL_DASH = new Date().getFullYear();
+    const filtroAno = ref(ANO_ATUAL_DASH);
+    const filtroMes = ref("todos");
+    const filtroArea = ref("todas");
 
-    const historico = computed(() => {
-      const p = preventivas.value.map(x => ({
-        tipo: "Preventiva",
-        titulo: `${x.equipamento ? x.equipamento + " - " : ""}${x.area || ""}`,
-        subtitulo: x.usuario || "",
-        data: x.data,
-        badge: x.status === "NC" ? "Não Conforme" : x.status === "NA" ? "Não Aplicável" : "Conforme",
-        badgeColor: x.status === "NC" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700",
-      }));
-      const c = corretivas.value.map(x => ({
-        tipo: "Corretiva",
-        titulo: `${x.equipamento || ""} (${x.area || ""})`,
-        subtitulo: x.solicitante || "",
-        data: x.data,
-        badge: x.status || x.prioridade,
-        badgeColor: String(x.status).toLowerCase() === "aberto" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600",
-      }));
-      let all = [...p, ...c];
-      if (filtroTipo.value !== "todos") {
-        all = all.filter(item => item.tipo.toLowerCase() === filtroTipo.value);
-      }
-      return all.sort((a, b) => new Date(b.data) - new Date(a.data)).slice(0, 50);
-    });
+    function parseData(v) {
+      return parseDataHoraLocal(v);
+    }
 
     async function carregar() {
       loading.value = true;
@@ -3644,85 +3627,508 @@ const DashboardModule = {
         const data = await getInitialData();
         preventivas.value = extractPreventivas(data);
         corretivas.value = extractCorretivas(data);
+        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        todosEquipamentos.value = (Array.isArray(rawEquip) ? rawEquip : []).map(e => ({
+          idDisplay: e.ID || e.Id || e.id || "",
+          nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          tag: e.TAG || e.Tag || e.tag || "",
+          area: e.Area || e.area || "",
+          periodicidade: normalizePeriodicidade(
+            e.Periodicidade || e.periodicidade || e.Frequencia || e.frequencia || e.Frequência || e.frequência || ""
+          ),
+          mesReferencia: parseInt(e.Mes_Referencia || e.mes_referencia || e.MesReferencia || e.mesReferencia, 10) || 1,
+        }));
       } catch (err) {
         console.error(err);
-        erro.value = "Não foi possível carregar o histórico.";
+        erro.value = "Não foi possível carregar o Dashboard.";
       } finally {
         loading.value = false;
       }
     }
 
-    function formatarData(iso) {
-      if (!iso) return "-";
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
-      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const anosDisponiveis = computed(() => {
+      const anos = new Set([ANO_ATUAL_DASH]);
+      preventivas.value.forEach(p => { const { ano } = extrairAnoMes(p.data); if (ano) anos.add(ano); });
+      corretivas.value.forEach(c => { const { ano } = extrairAnoMes(c.data); if (ano) anos.add(ano); });
+      return Array.from(anos).sort((a, b) => b - a);
+    });
+
+    function areaOk(area) {
+      return filtroArea.value === "todas" || normalizarTexto(area) === normalizarTexto(filtroArea.value);
+    }
+    function noPeriodo(dataStr) {
+      const { ano, mes } = extrairAnoMes(dataStr);
+      if (ano === null) return false;
+      if (ano !== filtroAno.value) return false;
+      if (filtroMes.value !== "todos" && mes !== Number(filtroMes.value)) return false;
+      return true;
+    }
+    const preventivasFiltradas = computed(() => preventivas.value.filter(p => noPeriodo(p.data) && areaOk(p.area)));
+    const corretivasFiltradas = computed(() => corretivas.value.filter(c => noPeriodo(c.data) && areaOk(c.area)));
+
+    function chaveAtivoDash(eq) {
+      return eq.idDisplay
+        ? "id:" + normalizarTexto(eq.idDisplay)
+        : "nome:" + normalizarTexto(eq.nome) + "|" + normalizarTexto(eq.area);
+    }
+    const ativosAgrupados = computed(() => {
+      const grupos = new Map();
+      todosEquipamentos.value.forEach(row => {
+        const chave = chaveAtivoDash(row);
+        if (!grupos.has(chave)) {
+          grupos.set(chave, { chave, idDisplay: row.idDisplay, nome: row.nome, tag: row.tag, area: row.area, perfis: [] });
+        }
+        grupos.get(chave).perfis.push(row);
+      });
+      return Array.from(grupos.values());
+    });
+    const ativosFiltrados = computed(() => ativosAgrupados.value.filter(a => areaOk(a.area)));
+
+    // Aderência ao Cronograma Preventivo — mesmo motor de agendamento da
+    // Preventiva/Indicadores (mesesProgramadosEquipamento + a meta da 3ª
+    // quinta-feira, getThirdThursday).
+    function calcularAderencia(ativos, ano, mesFiltro) {
+      const mesesAlvo = mesFiltro === "todos" ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] : [Number(mesFiltro)];
+      let programadas = 0, noPrazo = 0;
+      ativos.forEach(ativo => {
+        (ativo.perfis || []).forEach(perfil => {
+          mesesProgramadosEquipamento(perfil).forEach(mes => {
+            if (!mesesAlvo.includes(mes)) return;
+            programadas++;
+            const planejada = getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
+            const executadaNoPrazo = preventivas.value.some(p => {
+              const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
+              if (anoLog !== ano || mesLog !== mes) return false;
+              if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
+              if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+              const d = parseData(p.data);
+              return d && d.getTime() <= planejada;
+            });
+            if (executadaNoPrazo) noPrazo++;
+          });
+        });
+      });
+      return { programadas, noPrazo };
     }
 
-    onMounted(carregar);
+    function corretivasDoAtivo(ativo) {
+      return corretivasFiltradas.value.filter(c =>
+        normalizarTexto(c.equipamento) === normalizarTexto(ativo.nome) &&
+        (!c.area || !ativo.area || normalizarTexto(c.area) === normalizarTexto(ativo.area))
+      );
+    }
+    // Classificação de disponibilidade por ativo (3 níveis — mesma leitura da
+    // Legenda de Status usada em Indicadores): operacional / alerta / indisponível.
+    function statusAtivo(ativo) {
+      const cs = corretivasDoAtivo(ativo);
+      if (cs.some(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status))) return "indisponivel";
+      if (cs.length > 0) return "alerta";
+      return "operacional";
+    }
 
-    return { loading, erro, stats, historico, filtroTipo, carregar, formatarData };
+    function mttrDeLista(lista) {
+      const pares = lista
+        .map(c => ({ abertura: parseData(c.data), conclusao: parseData(c.dataConclusao) }))
+        .filter(p => p.abertura && p.conclusao && p.conclusao >= p.abertura);
+      if (pares.length === 0) return 0;
+      const totalMs = pares.reduce((acc, p) => acc + (p.conclusao - p.abertura), 0);
+      return totalMs / pares.length / 36e5; // horas
+    }
+
+    // ===== Card 1: Health Score (Aderência + Conformidade + Disponibilidade) =====
+    const taxaConformidade = computed(() => {
+      const lista = preventivasFiltradas.value;
+      if (lista.length === 0) return 100;
+      return Math.round((lista.filter(p => p.status === "C").length / lista.length) * 100);
+    });
+    const aderenciaPlano = computed(() => {
+      const { programadas, noPrazo } = calcularAderencia(ativosFiltrados.value, filtroAno.value, filtroMes.value);
+      return programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
+    });
+    const disponibilidadeMedia = computed(() => {
+      const ativos = ativosFiltrados.value;
+      if (ativos.length === 0) return 100;
+      const operacionais = ativos.filter(a => statusAtivo(a) === "operacional").length;
+      return Math.round((operacionais / ativos.length) * 100);
+    });
+    const healthScore = computed(() => Math.round((taxaConformidade.value + aderenciaPlano.value + disponibilidadeMedia.value) / 3));
+    const healthBadge = computed(() => {
+      const v = healthScore.value;
+      if (v >= 90) return { label: "Excelente", cor: "🟢", cls: "border-emerald-500 text-emerald-600", bg: "bg-emerald-50" };
+      if (v >= 75) return { label: "Atenção", cor: "🟡", cls: "border-amber-500 text-amber-600", bg: "bg-amber-50" };
+      return { label: "Crítico", cor: "🔴", cls: "border-red-500 text-red-600", bg: "bg-red-50" };
+    });
+
+    // ===== Card 3: Chamados Corretivos Ativos =====
+    const corretivasAtivasCount = computed(() => corretivasFiltradas.value.filter(c => isStatusChamadoAberto(c.status)).length);
+    const corretivasAtivasCriticas = computed(() =>
+      corretivasFiltradas.value.filter(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status)).length
+    );
+
+    // ===== Card 4: MTTR Médio Global =====
+    const mttrGlobal = computed(() => mttrDeLista(corretivasFiltradas.value));
+
+    // ===== Gráfico 1: tendência mensal (ano inteiro, respeita só o setor) =====
+    const dadosTendenciaMensal = computed(() => {
+      const ano = filtroAno.value;
+      const preventivasPorMes = new Array(12).fill(0);
+      const corretivasPorMes = new Array(12).fill(0);
+      preventivas.value.forEach(p => {
+        if (!areaOk(p.area)) return;
+        const { ano: anoLog, mes } = extrairAnoMes(p.data);
+        if (anoLog !== ano || !mes) return;
+        preventivasPorMes[mes - 1]++;
+      });
+      corretivas.value.forEach(c => {
+        if (!areaOk(c.area)) return;
+        const { ano: anoLog, mes } = extrairAnoMes(c.data);
+        if (anoLog !== ano || !mes) return;
+        corretivasPorMes[mes - 1]++;
+      });
+      return { labels: meses.map(m => m.l.slice(0, 3)), preventivasPorMes, corretivasPorMes };
+    });
+
+    // ===== Gráfico 2: status operacional da planta (doughnut) =====
+    const dadosStatusPlanta = computed(() => {
+      const ativos = ativosFiltrados.value;
+      const total = ativos.length;
+      const contagem = { operacional: 0, alerta: 0, indisponivel: 0 };
+      ativos.forEach(a => { contagem[statusAtivo(a)]++; });
+      const pct = k => total === 0 ? 0 : Math.round((contagem[k] / total) * 100);
+      return {
+        labels: [`🟢 Operacional (${pct("operacional")}%)`, `🟡 Em Alerta (${pct("alerta")}%)`, `🔴 Indisponível (${pct("indisponivel")}%)`],
+        valores: [contagem.operacional, contagem.alerta, contagem.indisponivel],
+      };
+    });
+
+    // ===== Gráfico 3: % conformidade por setor (barras horizontais) =====
+    // Ignora o filtro de setor de propósito — o objetivo do gráfico é
+    // comparar setores entre si para destacar os mais críticos.
+    const dadosConformidadePorSetor = computed(() => {
+      const linhas = areas.map(area => {
+        const lista = preventivas.value.filter(p => noPeriodo(p.data) && normalizarTexto(p.area) === normalizarTexto(area));
+        const pct = lista.length === 0 ? 100 : Math.round((lista.filter(p => p.status === "C").length / lista.length) * 100);
+        return { area, pct };
+      }).sort((a, b) => a.pct - b.pct);
+      return {
+        labels: linhas.map(l => l.area),
+        valores: linhas.map(l => l.pct),
+        cores: linhas.map(l => l.pct < 70 ? CORES_COCKPIT.setorRuim : l.pct < 90 ? CORES_COCKPIT.setorMedio : CORES_COCKPIT.setorBom),
+      };
+    });
+
+    // ===== Gráfico 4: Top 5 ativos por downtime acumulado (Pareto) =====
+    const dadosTopDowntime = computed(() => {
+      const linhas = ativosFiltrados.value.map(ativo => {
+        const pares = corretivasDoAtivo(ativo)
+          .map(c => ({ abertura: parseData(c.data), conclusao: parseData(c.dataConclusao) }))
+          .filter(p => p.abertura && p.conclusao && p.conclusao >= p.abertura);
+        const horas = pares.reduce((acc, p) => acc + (p.conclusao - p.abertura) / 36e5, 0);
+        return { nome: ativo.nome, horas: Math.round(horas * 10) / 10 };
+      }).filter(l => l.horas > 0).sort((a, b) => b.horas - a.horas).slice(0, 5);
+      return { labels: linhas.map(l => l.nome), valores: linhas.map(l => l.horas) };
+    });
+
+    // ===== Nível 3: Feed de Alertas Operacionais =====
+    const alertasCorretivasAbertas = computed(() =>
+      corretivasFiltradas.value
+        .filter(c => isStatusChamadoAberto(c.status))
+        .sort((a, b) => (c => c.prioridade === "Crítica" ? 0 : 1)(a) - (c => c.prioridade === "Crítica" ? 0 : 1)(b) || new Date(a.data) - new Date(b.data))
+        .slice(0, 6)
+    );
+    const alertasNaoConformes = computed(() =>
+      preventivasFiltradas.value
+        .filter(p => p.status === "NC")
+        .sort((a, b) => new Date(b.data) - new Date(a.data))
+        .slice(0, 6)
+    );
+    // Próximas preventivas vencendo na 3ª quinta-feira do MÊS CORRENTE real
+    // (independe do filtro de ano/mês do dashboard — é sempre "hoje").
+    const alertasVencimento = computed(() => {
+      const hoje = new Date();
+      const anoAtual = hoje.getFullYear();
+      const mesAtual = hoje.getMonth() + 1;
+      const planejada = getThirdThursday(anoAtual, mesAtual - 1);
+      const vistos = new Set();
+      const resultado = [];
+      ativosFiltrados.value.forEach(ativo => {
+        (ativo.perfis || []).forEach(perfil => {
+          if (!mesesProgramadosEquipamento(perfil).includes(mesAtual)) return;
+          const chave = normalizarTexto(ativo.nome) + "|" + normalizarTexto(ativo.area);
+          if (vistos.has(chave)) return;
+          const jaTemLog = preventivas.value.some(p => {
+            const { ano, mes } = extrairAnoMes(p.data);
+            if (ano !== anoAtual || mes !== mesAtual) return false;
+            if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
+            if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+            return true;
+          });
+          if (jaTemLog) return;
+          vistos.add(chave);
+          resultado.push({
+            nome: ativo.nome, area: ativo.area, periodicidade: perfil.periodicidade,
+            planejada, atrasada: planejada.getTime() < hoje.getTime(),
+          });
+        });
+      });
+      return resultado.sort((a, b) => a.atrasada === b.atrasada ? 0 : a.atrasada ? -1 : 1).slice(0, 8);
+    });
+
+    // ===== Chart.js: criação/destruição dos 4 gráficos =====
+    const canvasTendenciaRef = ref(null);
+    const canvasStatusRef = ref(null);
+    const canvasSetorRef = ref(null);
+    const canvasDowntimeRef = ref(null);
+    let chartTendencia = null, chartStatus = null, chartSetor = null, chartDowntime = null;
+
+    function destruirGraficos() {
+      if (chartTendencia) { chartTendencia.destroy(); chartTendencia = null; }
+      if (chartStatus) { chartStatus.destroy(); chartStatus = null; }
+      if (chartSetor) { chartSetor.destroy(); chartSetor = null; }
+      if (chartDowntime) { chartDowntime.destroy(); chartDowntime = null; }
+    }
+
+    function renderGraficos() {
+      if (typeof Chart === "undefined") return;
+      destruirGraficos();
+
+      if (canvasTendenciaRef.value) {
+        const d = dadosTendenciaMensal.value;
+        chartTendencia = new Chart(canvasTendenciaRef.value, {
+          type: "line",
+          data: {
+            labels: d.labels,
+            datasets: [
+              { label: "Preventivas Executadas", data: d.preventivasPorMes, borderColor: CORES_COCKPIT.preventiva, backgroundColor: CORES_COCKPIT.preventiva, tension: 0.3, pointRadius: 3 },
+              { label: "Corretivas Abertas", data: d.corretivasPorMes, borderColor: CORES_COCKPIT.corretiva, backgroundColor: CORES_COCKPIT.corretiva, tension: 0.3, pointRadius: 3 },
+            ],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          },
+        });
+      }
+
+      if (canvasStatusRef.value) {
+        const d = dadosStatusPlanta.value;
+        chartStatus = new Chart(canvasStatusRef.value, {
+          type: "doughnut",
+          data: { labels: d.labels, datasets: [{ data: d.valores, backgroundColor: CORES_COCKPIT.status }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } } },
+        });
+      }
+
+      if (canvasSetorRef.value) {
+        const d = dadosConformidadePorSetor.value;
+        chartSetor = new Chart(canvasSetorRef.value, {
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Conformidade (%)", data: d.valores, backgroundColor: d.cores, borderRadius: 4 }] },
+          options: {
+            indexAxis: "y", responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { beginAtZero: true, max: 100 } },
+          },
+        });
+      }
+
+      if (canvasDowntimeRef.value) {
+        const d = dadosTopDowntime.value;
+        chartDowntime = new Chart(canvasDowntimeRef.value, {
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Horas de Parada", data: d.valores, backgroundColor: CORES_COCKPIT.downtime, borderRadius: 4 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } },
+          },
+        });
+      }
+    }
+
+    watch([dadosTendenciaMensal, dadosStatusPlanta, dadosConformidadePorSetor, dadosTopDowntime], () => {
+      nextTick(renderGraficos);
+    });
+
+    function irPreventiva() { emit("navigate", "preventiva"); }
+    function irCorretiva() { emit("navigate", "corretiva"); }
+    function irLaudos() {
+      pushToast("Acesse Preventiva ▸ Histórico (RSG-6301) ou Corretiva ▸ Encerrados (RSG-6302) para visualizar os laudos.", "info");
+      emit("navigate", "preventiva");
+    }
+
+    function formatarHoras(h) {
+      if (h === null || h === undefined || isNaN(h)) return "0h";
+      if (h === 0) return "0h";
+      return h < 24 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d";
+    }
+    function formatarPercentual(v) {
+      return v === null || v === undefined || isNaN(v) ? "100%" : v + "%";
+    }
+    function formatarData(iso) {
+      if (!iso) return "-";
+      const d = parseData(iso);
+      if (!d) return String(iso);
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+    function formatarDataCurtaLocal(d) {
+      if (!d) return "-";
+      return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    }
+
+    onMounted(async () => {
+      await carregar();
+      nextTick(renderGraficos);
+    });
+    onUnmounted(destruirGraficos);
+
+    return {
+      loading, erro, carregar, areas, meses,
+      filtroAno, filtroMes, filtroArea, anosDisponiveis,
+      irPreventiva, irCorretiva, irLaudos,
+      healthScore, healthBadge, aderenciaPlano, corretivasAtivasCount, corretivasAtivasCriticas, mttrGlobal,
+      canvasTendenciaRef, canvasStatusRef, canvasSetorRef, canvasDowntimeRef,
+      alertasCorretivasAbertas, alertasNaoConformes, alertasVencimento,
+      formatarHoras, formatarPercentual, formatarData, formatarDataCurtaLocal, corPrioridade: p => (PRIORIDADES.find(x => x.value === p) || {}).color || "bg-slate-100 text-slate-700 border-slate-300",
+    };
   },
   template: `
   <div class="space-y-5">
-    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
-      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
-    </div>
-
-    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
-      {{ erro }}
-    </div>
-
-    <template v-else>
-      <div class="grid grid-cols-2 gap-3">
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">Chamados Abertos</p>
-          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ stats.abertos }}</p>
-        </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">Críticos</p>
-          <p class="text-3xl font-extrabold text-red-600 mt-1">{{ stats.criticos }}</p>
-        </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">Não Conformes</p>
-          <p class="text-3xl font-extrabold text-amber-600 mt-1">{{ stats.naoConformes }}</p>
-        </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">Checklists Feitos</p>
-          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ stats.totalPreventivas }}</p>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between">
-        <h3 class="font-bold text-slate-700">Histórico de Atividades</h3>
-        <button @click="carregar" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
-      </div>
-
-      <div class="flex gap-2">
-        <button v-for="f in [{v:'todos', l:'Todos'}, {v:'preventiva', l:'Preventiva'}, {v:'corretiva', l:'Corretiva'}]" :key="f.v"
-          @click="filtroTipo = f.v"
-          class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
-          :class="filtroTipo === f.v ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
-          {{ f.l }}
+    <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-3">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option v-for="a in anosDisponiveis" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <select v-model="filtroMes" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="todos">Mês: Todos</option>
+          <option v-for="m in meses" :key="m.v" :value="m.v">{{ m.l }}</option>
+        </select>
+        <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 col-span-2 sm:col-span-1">
+          <option value="todas">Setor: Todos</option>
+          <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <button @click="carregar" :disabled="loading"
+          class="btn-tap flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold rounded-lg text-sm">
+          <span v-if="loading" class="spinner"></span>
+          <span>{{ loading ? "Atualizando..." : "🔄 Atualizar" }}</span>
         </button>
       </div>
 
-      <div v-if="historico.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-        Nenhum registro encontrado.
+      <div class="flex flex-wrap gap-2">
+        <button @click="irPreventiva" class="btn-tap flex-1 min-w-[150px] flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          + Executar Preventiva
+        </button>
+        <button @click="irCorretiva" class="btn-tap flex-1 min-w-[150px] flex items-center justify-center gap-1.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          + Abrir Chamado Corretivo
+        </button>
+        <button @click="irLaudos" class="btn-tap flex-1 min-w-[150px] flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          📑 Laudos RSG-6301/6302
+        </button>
       </div>
-      <div v-else class="space-y-2">
-        <div v-for="(h, idx) in historico" :key="idx" class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                :class="h.tipo === 'Preventiva' ? 'bg-sky-100 text-sky-700' : 'bg-orange-100 text-orange-700'">
-                {{ h.tipo }}
-              </span>
-              <p class="font-semibold text-slate-800 truncate">{{ h.titulo }}</p>
-            </div>
-            <p class="text-xs text-slate-400 mt-0.5">{{ h.subtitulo }} · {{ formatarData(h.data) }}</p>
+    </div>
+
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+
+    <template v-else>
+      <!-- NÍVEL 1: Health Score + KPIs -->
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center gap-4 sm:col-span-1">
+          <div class="w-20 h-20 rounded-full border-8 flex items-center justify-center shrink-0" :class="healthBadge.cls">
+            <span class="text-xl font-extrabold text-slate-800">{{ healthScore }}%</span>
           </div>
-          <span class="text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap" :class="h.badgeColor">{{ h.badge }}</span>
+          <div class="min-w-0">
+            <p class="text-xs text-slate-400 font-semibold uppercase">Saúde da Planta</p>
+            <p class="text-sm font-bold mt-0.5" :class="healthBadge.cls.split(' ')[1]">{{ healthBadge.cor }} {{ healthBadge.label }}</p>
+            <p class="text-[11px] text-slate-400 mt-0.5">Aderência + Conformidade + Disponibilidade</p>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Aderência ao Cronograma</p>
+          <p class="text-3xl font-extrabold text-indigo-600 mt-1">{{ formatarPercentual(aderenciaPlano) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Meta: 3ª quinta-feira do mês</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">Corretivos Ativos</p>
+          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ corretivasAtivasCount }}</p>
+          <p v-if="corretivasAtivasCriticas > 0" class="text-[11px] font-bold text-red-600 mt-1">🔴 {{ corretivasAtivasCriticas }} em parada crítica</p>
+          <p v-else class="text-[11px] text-slate-400 mt-1">Nenhum chamado crítico</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">MTTR Médio Global</p>
+          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarHoras(mttrGlobal) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Tempo médio de resposta</p>
+        </div>
+      </div>
+
+      <!-- NÍVEL 2: Gráficos -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
+          <h3 class="font-bold text-slate-700 mb-3">Tendência Mensal — Preventivas Executadas x Corretivas Abertas</h3>
+          <div style="height: 260px"><canvas ref="canvasTendenciaRef"></canvas></div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Status Operacional da Planta</h3>
+          <div style="height: 240px"><canvas ref="canvasStatusRef"></canvas></div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Conformidade por Setor</h3>
+          <div style="height: 240px"><canvas ref="canvasSetorRef"></canvas></div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
+          <h3 class="font-bold text-slate-700 mb-3">Top 5 Ativos — Maior Downtime Acumulado</h3>
+          <div style="height: 240px"><canvas ref="canvasDowntimeRef"></canvas></div>
+        </div>
+      </div>
+
+      <!-- NÍVEL 3: Feed de Alertas -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">🛠️ Corretivas Aguardando Encerramento</h3>
+          <div v-if="alertasCorretivasAbertas.length === 0" class="text-xs text-slate-400 text-center py-4">Nenhum chamado em aberto. 🎉</div>
+          <div v-else class="space-y-2">
+            <div v-for="c in alertasCorretivasAbertas" :key="c.id" class="flex items-center justify-between gap-2 text-xs border-t border-slate-100 pt-2 first:border-0 first:pt-0">
+              <div class="min-w-0">
+                <p class="font-semibold text-slate-700 truncate">{{ c.equipamento || "—" }}</p>
+                <p class="text-slate-400 truncate">{{ c.area }} · {{ formatarData(c.data) }}</p>
+              </div>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap" :class="corPrioridade(c.prioridade)">{{ c.prioridade }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">⚠️ Itens Não Conformes (última preventiva)</h3>
+          <div v-if="alertasNaoConformes.length === 0" class="text-xs text-slate-400 text-center py-4">Nenhuma não conformidade no período. 🎉</div>
+          <div v-else class="space-y-2">
+            <div v-for="(p, idx) in alertasNaoConformes" :key="idx" class="flex items-center justify-between gap-2 text-xs border-t border-slate-100 pt-2 first:border-0 first:pt-0">
+              <div class="min-w-0">
+                <p class="font-semibold text-slate-700 truncate">{{ p.equipamento || "—" }}</p>
+                <p class="text-slate-400 truncate">{{ p.area }} · {{ formatarData(p.data) }}</p>
+              </div>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 whitespace-nowrap">NC</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">📅 Preventivas Vencendo Este Mês</h3>
+          <div v-if="alertasVencimento.length === 0" class="text-xs text-slate-400 text-center py-4">Nenhuma preventiva pendente este mês. 🎉</div>
+          <div v-else class="space-y-2">
+            <div v-for="(v, idx) in alertasVencimento" :key="idx" class="flex items-center justify-between gap-2 text-xs border-t border-slate-100 pt-2 first:border-0 first:pt-0">
+              <div class="min-w-0">
+                <p class="font-semibold text-slate-700 truncate">{{ v.nome }}</p>
+                <p class="text-slate-400 truncate">{{ v.area }} · {{ v.periodicidade }}</p>
+              </div>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                :class="v.atrasada ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'">
+                {{ v.atrasada ? "🔴 Atrasada" : "🟡" }} {{ formatarDataCurtaLocal(v.planejada) }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -4456,7 +4862,7 @@ const App = {
           <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" @go-home="irParaHome" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
           <indicadores-module v-else-if="currentView === 'indicadores'" key="ind"></indicadores-module>
-          <dashboard-module v-else key="dash"></dashboard-module>
+          <dashboard-module v-else @navigate="navigate" key="dash"></dashboard-module>
         </transition>
       </main>
     </div>
