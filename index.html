@@ -52,7 +52,7 @@ const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, onErr
 const API_URL = "https://script.google.com/macros/s/AKfycbxeM7DmvSrJW_uzm30LRwZsZnlQQO5MNwNzmC75dLd5lwJB1MFfZnQRIHuF2ihBl0_U/exec";
 const STORAGE_USER_KEY = "hidrogeron_user";
 
-const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidráulica", "Oficina"];
+const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidráulica", "Oficina", "Tecnologia da Informação"];
 const PRIORIDADES = [
   { value: "Baixa",   color: "bg-blue-100 text-blue-700 border-blue-300" },
   { value: "Média",   color: "bg-yellow-100 text-yellow-700 border-yellow-300" },
@@ -529,6 +529,35 @@ function normalizeStatusInspecao(s) {
   return null;
 }
 
+// ===== Setor de Tecnologia da Informação (ativos geridos pela IRONTECH) =====
+// Prestador de serviço externo responsável pela manutenção preventiva de
+// todo o parque de TI — usado para sugerir automaticamente o executor do
+// checklist e para identificar o prestador no laudo RSG-6301-01.
+const AREA_TI = "Tecnologia da Informação";
+const PRESTADOR_TI = "IRONTECH";
+function ehAreaTI(area) {
+  return normalizarTexto(area) === normalizarTexto(AREA_TI);
+}
+
+// Itens de inspeção do checklist RSG-6301-01, específicos por ativo de TI —
+// prevalecem sobre o texto livre de "Itens_Inspecao_Recomendados" da
+// planilha (quando cadastrado para estes ativos) para garantir que a
+// Matriz de Verificação siga exatamente o padrão definido para a IRONTECH.
+const ITENS_INSPECAO_TI = {
+  [normalizarTexto("Servidor Central")]: [
+    "Integridade do Hardware", "Rotinas e Logs de Backup", "Espaço e Monitoramento de Disco", "Temperatura e Redundância",
+  ],
+  [normalizarTexto("Terminais de Trabalho")]: [
+    "Atualização de SO e Softwares", "Status Antivírus / Segurança", "Licenciamento", "Desempenho Geral",
+  ],
+  [normalizarTexto("Servidor em Nuvem (OneDrive)")]: [
+    "Sincronização e Integridade de Dados", "Permissões e Controle de Acessos", "Cota de Armazenamento", "Políticas de Retenção e Lixeira",
+  ],
+};
+function itensInspecaoTI(nomeAtivo) {
+  return ITENS_INSPECAO_TI[normalizarTexto(nomeAtivo)] || null;
+}
+
 const MESES_PT = [
   { v: 1, l: "Janeiro" }, { v: 2, l: "Fevereiro" }, { v: 3, l: "Março" }, { v: 4, l: "Abril" },
   { v: 5, l: "Maio" }, { v: 6, l: "Junho" }, { v: 7, l: "Julho" }, { v: 8, l: "Agosto" },
@@ -873,6 +902,14 @@ const LaudoPreventivaModal = {
       return `${RSG_CODIGO}_${idParte}_${dataParte}.pdf`;
     });
 
+    // Identifica claramente no laudo quando a manutenção foi executada pelo
+    // prestador de serviço externo IRONTECH (setor de TI, ou inspetor
+    // registrado como IRONTECH em laudos antigos sem o campo de área).
+    const laudoEhPrestadorExterno = computed(() => {
+      const l = props.laudo || {};
+      return ehAreaTI(l.area) || normalizarTexto(l.inspetor) === normalizarTexto(PRESTADOR_TI);
+    });
+
     function imprimir() {
       window.print();
     }
@@ -905,7 +942,7 @@ const LaudoPreventivaModal = {
       }
     }
 
-    return { exportandoPdf, formatarDataHora, formatarStatusItem, condicaoInfo, nomeArquivo, imprimir, exportarPDF, RSG_CODIGO, RSG_TITULO };
+    return { exportandoPdf, formatarDataHora, formatarStatusItem, condicaoInfo, nomeArquivo, laudoEhPrestadorExterno, imprimir, exportarPDF, RSG_CODIGO, RSG_TITULO };
   },
   template: `
   <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
@@ -941,12 +978,17 @@ const LaudoPreventivaModal = {
         <!-- Responsabilidade Técnica -->
         <div>
           <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Responsabilidade Técnica</h4>
-          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 flex items-center justify-between gap-2">
-            <p class="text-sm"><span class="text-slate-400">Inspetor/Técnico:</span> <span class="font-medium text-slate-800">{{ laudo.inspetor || '-' }}</span></p>
-            <span class="text-xs font-bold px-3 py-1 rounded-full"
-              :class="laudo.statusGeral === 'Não Conforme' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'">
-              {{ (laudo.statusGeral || 'Conforme').toUpperCase() }}
-            </span>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-sm"><span class="text-slate-400">Inspetor/Técnico:</span> <span class="font-medium text-slate-800">{{ laudo.inspetor || '-' }}</span></p>
+              <span class="text-xs font-bold px-3 py-1 rounded-full"
+                :class="laudo.statusGeral === 'Não Conforme' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'">
+                {{ (laudo.statusGeral || 'Conforme').toUpperCase() }}
+              </span>
+            </div>
+            <p v-if="laudoEhPrestadorExterno" class="text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full px-3 py-1 inline-block">
+              🖥️ Prestador de Serviço: IRONTECH (Externo)
+            </p>
           </div>
         </div>
 
@@ -1070,6 +1112,11 @@ const PreventivaModule = {
     const inputCameraRef = ref(null);
     const inputGaleriaRef = ref(null);
     const itemFotoAlvo = ref(null); // item-alvo do próximo arquivo selecionado nos inputs acima (compartilhados entre itens)
+
+    // Nome do Executor/Inspetor do checklist — sugerido automaticamente
+    // (usuário logado, ou "IRONTECH" para ativos do setor de TI, ver
+    // abrirEquipamento), mas sempre editável antes de salvar.
+    const nomeExecutor = ref("");
 
     // Assinatura Digital em Tela — capturada ao concluir a inspeção,
     // estampada no rodapé de Validação do laudo RSG-6301-01.
@@ -1254,7 +1301,8 @@ const PreventivaModule = {
       const vistos = new Set();
       const itens = [];
       (ativo && ativo.perfis || []).forEach(perfil => {
-        parseItensInspecao(perfil.itensInspecao).forEach(texto => {
+        const textosPerfil = (ativo && itensInspecaoTI(ativo.nome)) || parseItensInspecao(perfil.itensInspecao);
+        textosPerfil.forEach(texto => {
           const chave = texto.trim().toLowerCase();
           if (vistos.has(chave)) return;
           vistos.add(chave);
@@ -1511,7 +1559,11 @@ const PreventivaModule = {
       const blocos = [];
       ativo.perfis.forEach(perfil => {
         if (!mesesProgramadosEquipamento(perfil).includes(mesAtual)) return;
-        const itens = parseItensInspecao(perfil.itensInspecao).map(texto => ({
+        // Ativos de TI têm sua Matriz de Verificação padronizada pela
+        // IRONTECH (ver ITENS_INSPECAO_TI) — prevalece sobre o texto livre
+        // cadastrado na planilha, quando existir, para este equipamento.
+        const textosItens = itensInspecaoTI(ativo.nome) || parseItensInspecao(perfil.itensInspecao);
+        const itens = textosItens.map(texto => ({
           texto, status: null, periodicidade: perfil.periodicidade,
           observacao: "", fotoBase64: null, fotoNome: "",
         }));
@@ -1519,6 +1571,10 @@ const PreventivaModule = {
       });
       blocosChecklist.value = blocos;
       itensChecklist.value = blocos.flatMap(b => b.itens);
+
+      // Sugestão automática do executor: prestador externo IRONTECH para
+      // ativos do setor de TI, senão o próprio usuário logado.
+      nomeExecutor.value = ehAreaTI(ativo.area) ? PRESTADOR_TI : (props.user.nome || "");
 
       observacoesGerais.value = "";
       itemFotoAlvo.value = null;
@@ -1533,6 +1589,7 @@ const PreventivaModule = {
       equipamentoSelecionado.value = null;
       itensChecklist.value = [];
       blocosChecklist.value = [];
+      nomeExecutor.value = "";
       observacoesGerais.value = "";
       itemFotoAlvo.value = null;
       assinaturaInspetor.value = null;
@@ -1543,6 +1600,8 @@ const PreventivaModule = {
     function setItemStatus(item, value) {
       item.status = item.status === value ? null : value;
     }
+
+    const ativoSelecionadoEhTI = computed(() => !!equipamentoSelecionado.value && ehAreaTI(equipamentoSelecionado.value.area));
 
     function fecharLaudo() {
       laudoAberto.value = false;
@@ -1644,6 +1703,10 @@ const PreventivaModule = {
         pushToast("Informe a justificativa em cada item Não Aplicável.", "error");
         return;
       }
+      if (!nomeExecutor.value.trim()) {
+        pushToast("Informe o nome do Executor/Inspetor.", "error");
+        return;
+      }
       if (!assinaturaInspetor.value) {
         pushToast("Colete a assinatura do Inspetor/Técnico Responsável.", "error");
         return;
@@ -1676,7 +1739,7 @@ const PreventivaModule = {
 
         const equipamentoNome = equipamentoSelecionado.value.nome;
         const areaAtual = areaSelecionada.value;
-        const usuarioNome = props.user.nome;
+        const usuarioNome = nomeExecutor.value.trim() || props.user.nome;
 
         const resp = await savePreventivaApi({
           idLog, dataHora,
@@ -1946,7 +2009,7 @@ const PreventivaModule = {
       loadingDados, erroCarregamento, statsPorArea, equipamentosDaAreaAtual, progressoSetor,
       periodicidadesDaArea, filtroPeriodicidadeLista, equipamentosFiltradosLista,
       itensChecklist, blocosChecklist, temNC, progresso,
-      observacoesGerais, salvando,
+      observacoesGerais, salvando, nomeExecutor, ativoSelecionadoEhTI,
       inputCameraRef, inputGaleriaRef,
       assinaturaSupervisorNome, onAssinaturaInspetor, onAssinaturaSupervisor,
       abrirArea, voltarSetores, abrirHistorico, abrirCalendario,
@@ -2175,6 +2238,16 @@ const PreventivaModule = {
         </p>
         <p v-if="equipamentoSelecionado.modelo" class="text-sm text-slate-500 mt-0.5">Modelo: {{ equipamentoSelecionado.modelo }}</p>
         <p v-if="equipamentoSelecionado.tag" class="text-xs text-slate-400 font-mono mt-0.5">{{ equipamentoSelecionado.tag }}</p>
+        <span v-if="ativoSelecionadoEhTI"
+          class="inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+          🖥️ Prestador de Serviço: IRONTECH (Externo)
+        </span>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Executor/Inspetor *</label>
+        <input v-model="nomeExecutor" type="text" placeholder="Nome de quem está executando a inspeção"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
       </div>
 
       <div v-if="itensChecklist.length" class="bg-white rounded-xl border border-slate-200 p-4">
