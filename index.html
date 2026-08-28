@@ -4277,6 +4277,26 @@ const IndicadoresModule = {
           </table>
         </div>
       </div>
+
+      <!-- Glossário e Legenda Técnica -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">📖 Glossário e Legenda Técnica</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="bg-white rounded-lg border border-slate-200 p-3 space-y-2 text-xs text-slate-600">
+            <p class="font-bold text-slate-700 text-xs uppercase tracking-wide mb-1">Siglas e Fórmulas de Manutenção</p>
+            <p><span class="font-bold text-slate-700">MTBF</span> <span class="text-slate-400">(Mean Time Between Failures)</span> — Tempo médio em horas de operação contínua entre falhas. Indica a confiabilidade do ativo. <span class="italic">(Quanto maior, melhor.)</span></p>
+            <p><span class="font-bold text-slate-700">MTTR</span> <span class="text-slate-400">(Mean Time To Repair)</span> — Tempo médio em horas/minutos gasto no reparo de chamados corretivos. Indica a agilidade técnica. <span class="italic">(Quanto menor, melhor.)</span></p>
+            <p><span class="font-bold text-slate-700">Aderência (%)</span> — Percentual de inspeções preventivas executadas dentro da janela programada (meta: 3ª quinta-feira do mês).</p>
+            <p><span class="font-bold text-slate-700">Conformidade (%)</span> — Razão entre itens conformes e o total de pontos inspecionados no período.</p>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-3 space-y-2 text-xs text-slate-600">
+            <p class="font-bold text-slate-700 text-xs uppercase tracking-wide mb-1">Legenda dos Status de Disponibilidade</p>
+            <p><span class="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">🟢 Operacional</span> <span class="text-slate-400">(100% – 95%)</span> — Ativo em pleno funcionamento, sem chamados abertos e plano preventivo em dia.</p>
+            <p><span class="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">🟡 Em Alerta</span> <span class="text-slate-400">(94% – 85%)</span> — Ativo com ocorrência recente de reparo ou preventiva próxima do limite.</p>
+            <p><span class="text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">🔴 Indisponível</span> <span class="text-slate-400">(&lt; 85%)</span> — Ativo com chamado corretivo em aberto gerando parada/downtime.</p>
+          </div>
+        </div>
+      </div>
     </template>
   </div>`
 };
