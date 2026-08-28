@@ -4059,15 +4059,29 @@ const IndicadoresModule = {
         // numérica na tabela, não é reconsultada aqui. Um ativo sem nenhuma
         // corretiva no período é sempre 🟢 100% Operacional, independente do
         // resultado do plano preventivo.
+        // title = mesmo texto do Glossário e Legenda Técnica (rodapé do
+        // módulo), exibido como tooltip nativo ao passar o mouse no badge.
         let status;
         if (corretivasAtivo.some(c => c.prioridade === "Crítica" && isStatusChamadoAberto(c.status))) {
-          status = { label: "🔴 Crítico", cls: "bg-red-100 text-red-700" };
+          status = {
+            label: "🔴 Crítico", cls: "bg-red-100 text-red-700",
+            title: "🔴 Indisponível (< 85%): Ativo com chamado corretivo em aberto gerando parada/downtime.",
+          };
         } else if (corretivasAtivo.length >= 3) {
-          status = { label: "🟡 Instável", cls: "bg-amber-100 text-amber-700" };
+          status = {
+            label: "🟡 Instável", cls: "bg-amber-100 text-amber-700",
+            title: "🟡 Em Alerta (94% - 85%): Ativo com ocorrência recente de reparo ou preventiva próxima do limite.",
+          };
         } else if (corretivasAtivo.length > 0) {
-          status = { label: "🟠 Atenção", cls: "bg-orange-100 text-orange-700" };
+          status = {
+            label: "🟠 Atenção", cls: "bg-orange-100 text-orange-700",
+            title: "🟡 Em Alerta (94% - 85%): Ativo com ocorrência recente de reparo ou preventiva próxima do limite.",
+          };
         } else {
-          status = { label: "🟢 100% Operacional", cls: "bg-emerald-100 text-emerald-700" };
+          status = {
+            label: "🟢 100% Operacional", cls: "bg-emerald-100 text-emerald-700",
+            title: "🟢 Operacional (100% - 95%): Ativo em pleno funcionamento, sem chamados abertos e plano preventivo em dia.",
+          };
         }
 
         return {
@@ -4270,7 +4284,7 @@ const IndicadoresModule = {
                 <td class="px-3 py-2 whitespace-nowrap">{{ l.chamados }}</td>
                 <td class="px-3 py-2 whitespace-nowrap">{{ formatarHoras(l.mttr) }}</td>
                 <td class="px-3 py-2 whitespace-nowrap">
-                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="l.status.cls">{{ l.status.label }}</span>
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full cursor-help" :class="l.status.cls" :title="l.status.title">{{ l.status.label }}</span>
                 </td>
               </tr>
             </tbody>
