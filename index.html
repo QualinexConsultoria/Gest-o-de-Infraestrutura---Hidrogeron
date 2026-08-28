@@ -162,13 +162,14 @@ async function saveCorretivaApi(payload) {
   return handleApiResponse(res);
 }
 
-async function closeCorretivaApi(idChamado, resolucao, tecnico) {
+async function closeCorretivaApi(idChamado, resolucao, tecnico, extra) {
   const params = new URLSearchParams({
     action: "closeCorretiva",
     idChamado: idChamado,
     resolucao: resolucao,
     tecnico: tecnico,
     dataFechamento: new Date().toISOString().replace("T", " ").substring(0, 16),
+    ...(extra || {}),
     _t: Date.now(),
   });
   let res;
@@ -201,6 +202,32 @@ async function savePreventivaApi(payload) {
     res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
   } catch (networkErr) {
     console.error("Erro de rede/CORS no savePreventiva:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
+}
+
+// Gestão Administrativa (Perfil Administrador): exclusão e edição de
+// registros de Preventiva/Corretiva. tipo: "preventiva" | "corretiva".
+async function deleteRecordApi(tipo, id) {
+  const params = new URLSearchParams({ action: "deleteRecord", tipo, id, _t: Date.now() });
+  let res;
+  try {
+    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no deleteRecord:", networkErr);
+    throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
+  }
+  return handleApiResponse(res);
+}
+
+async function updateRecordApi(tipo, id, campos) {
+  const params = new URLSearchParams({ action: "updateRecord", tipo, id, ...campos, _t: Date.now() });
+  let res;
+  try {
+    res = await fetch(`${API_URL}?${params.toString()}`, { method: "GET", redirect: "follow", cache: "no-store" });
+  } catch (networkErr) {
+    console.error("Erro de rede/CORS no updateRecord:", networkErr);
     throw new Error("Não foi possível conectar ao servidor (rede ou CORS).");
   }
   return handleApiResponse(res);
@@ -345,6 +372,7 @@ const LoginScreen = {
           email: found.Email || found.email,
           cargo: found.Cargo || found.cargo || found.Funcao || found.funcao || "",
           area: found.Area || found.area || "",
+          perfil: found.Perfil || found.perfil || "Colaborador",
         };
         localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
         pushToast(`Bem-vindo, ${user.nome}!`, "success");
@@ -396,6 +424,89 @@ const LoginScreen = {
       </form>
       <p class="text-center text-slate-400 text-xs mt-6">© {{ new Date().getFullYear() }} Hidrogeron — Sistema Interno de Manutenção</p>
     </div>
+  </div>`
+};
+
+/* ==========================================================================
+   ASSINATURA DIGITAL EM TELA (canvas sensível a toque/mouse)
+   Usado na validação dos laudos RSG-6301-01 (Preventiva) e RSG-6302-02
+   (Corretiva) — dispensa impressão física para colher assinatura.
+   ========================================================================== */
+const AssinaturaCanvas = {
+  props: { label: String },
+  emits: ["update"],
+  setup(props, { emit }) {
+    const canvasRef = ref(null);
+    const temTraco = ref(false);
+    let ctx = null;
+    let desenhando = false;
+
+    function posicaoRelativa(e) {
+      const rect = canvasRef.value.getBoundingClientRect();
+      const ponto = e.touches && e.touches.length ? e.touches[0] : e;
+      return { x: ponto.clientX - rect.left, y: ponto.clientY - rect.top };
+    }
+
+    function iniciarTraco(e) {
+      e.preventDefault();
+      desenhando = true;
+      const p = posicaoRelativa(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+    }
+
+    function continuarTraco(e) {
+      if (!desenhando) return;
+      e.preventDefault();
+      const p = posicaoRelativa(e);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      temTraco.value = true;
+    }
+
+    function finalizarTraco() {
+      if (!desenhando) return;
+      desenhando = false;
+      emit("update", canvasRef.value.toDataURL("image/png"));
+    }
+
+    function limpar() {
+      const c = canvasRef.value;
+      ctx.clearRect(0, 0, c.width, c.height);
+      temTraco.value = false;
+      emit("update", null);
+    }
+
+    onMounted(() => {
+      const c = canvasRef.value;
+      // Resolução do canvas em pixels reais (não CSS), para o traço não ficar
+      // borrado em telas de alta densidade (celulares/tablets).
+      const dpr = window.devicePixelRatio || 1;
+      c.width = c.clientWidth * dpr;
+      c.height = 150 * dpr;
+      ctx = c.getContext("2d");
+      ctx.scale(dpr, dpr);
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 2.2;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+    });
+
+    return { canvasRef, temTraco, iniciarTraco, continuarTraco, finalizarTraco, limpar };
+  },
+  template: `
+  <div>
+    <div class="flex items-center justify-between mb-1">
+      <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ label }} *</label>
+      <button type="button" @click="limpar" class="text-xs text-sky-600 font-semibold btn-tap">Limpar</button>
+    </div>
+    <canvas ref="canvasRef"
+      class="w-full block bg-white border-2 rounded-lg touch-none cursor-crosshair"
+      :class="temTraco ? 'border-emerald-300' : 'border-dashed border-slate-300'"
+      style="height:150px"
+      @mousedown="iniciarTraco" @mousemove="continuarTraco" @mouseup="finalizarTraco" @mouseleave="finalizarTraco"
+      @touchstart="iniciarTraco" @touchmove="continuarTraco" @touchend="finalizarTraco"></canvas>
+    <p v-if="!temTraco" class="text-[11px] text-slate-400 mt-1">Assine com o dedo ou o mouse na área acima.</p>
   </div>`
 };
 
@@ -497,6 +608,64 @@ function getThirdThursday(year, monthIndex) {
 // reconstituir laudos de registros do Histórico.
 function normalizarTexto(s) {
   return String(s || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Gest\u00e3o Administrativa: s\u00f3 usu\u00e1rios com Perfil "Administrador" (tabela
+// Usuarios) veem os bot\u00f5es de Editar/Excluir em Preventivas e Corretivas.
+function isAdmin(user) {
+  return normalizarTexto(user && user.perfil) === "administrador";
+}
+
+/* ==========================================================================
+   UPLOAD MISTO (fotos + documentos) — Corretiva, abertura de chamado
+   ========================================================================== */
+function lerArquivoComoDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Erro ao ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Compressão de imagem via canvas: redimensiona para largura máxima e
+// reexporta como JPEG na qualidade informada, reduzindo o tamanho do Base64
+// persistido (fotos de celular facilmente passam de 3-5MB sem isso).
+function comprimirImagem(file, maxWidth, qualidade) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const escala = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * escala);
+        canvas.height = Math.round(img.height * escala);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", qualidade));
+      };
+      img.onerror = () => reject(new Error("Erro ao carregar a imagem."));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Erro ao ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Tamanho aproximado (KB) de uma dataURL Base64, sem precisar decodificar.
+function tamanhoKbDataUrl(dataUrl) {
+  const base64 = String(dataUrl || "").split(",")[1] || "";
+  return Math.round((base64.length * 0.75) / 1024);
+}
+
+function iconeAnexo(nome) {
+  const ext = String(nome || "").split(".").pop().toLowerCase();
+  if (ext === "pdf") return "📄";
+  if (ext === "doc" || ext === "docx") return "📝";
+  if (ext === "xls" || ext === "xlsx") return "📊";
+  if (ext === "txt") return "📃";
+  return "📎";
 }
 
 function formatarDataCurta(d) {
@@ -691,16 +860,18 @@ const LaudoPreventivaModal = {
           <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Validação</h4>
           <div class="grid grid-cols-2 gap-6 text-xs text-slate-500">
             <div>
-              <div class="border-b border-slate-400 h-10"></div>
+              <img v-if="laudo.assinaturaInspetor" :src="laudo.assinaturaInspetor" class="h-14 object-contain border-b border-slate-400" alt="Assinatura do Técnico Responsável" />
+              <div v-else class="border-b border-slate-400 h-10"></div>
               <p class="mt-1 font-semibold text-slate-700">Técnico Responsável</p>
-              <p class="mt-3">Nome: ______________________________</p>
-              <p class="mt-2">Data: ____/____/________</p>
+              <p class="mt-3">Nome: {{ laudo.inspetor || '______________________________' }}</p>
+              <p class="mt-2">Data: {{ laudo.assinaturaInspetor ? formatarDataHora(laudo.dataHora) : '____/____/________' }}</p>
             </div>
             <div>
-              <div class="border-b border-slate-400 h-10"></div>
+              <img v-if="laudo.assinaturaSupervisor" :src="laudo.assinaturaSupervisor" class="h-14 object-contain border-b border-slate-400" alt="Assinatura da Supervisão/Gestão da Área" />
+              <div v-else class="border-b border-slate-400 h-10"></div>
               <p class="mt-1 font-semibold text-slate-700">Supervisão/Gestão da Área</p>
-              <p class="mt-3">Nome: ______________________________</p>
-              <p class="mt-2">Data: ____/____/________</p>
+              <p class="mt-3">Nome: {{ laudo.assinaturaSupervisorNome || '______________________________' }}</p>
+              <p class="mt-2">Data: {{ laudo.assinaturaSupervisor ? formatarDataHora(laudo.dataHora) : '____/____/________' }}</p>
             </div>
           </div>
         </div>
@@ -734,7 +905,7 @@ const LaudoPreventivaModal = {
 const PreventivaModule = {
   props: { user: Object },
   emits: ["go-home"],
-  components: { LaudoPreventivaModal },
+  components: { LaudoPreventivaModal, AssinaturaCanvas },
   setup(props, { emit }) {
     const areas = AREAS;
     const meses = MESES_PT;
@@ -757,6 +928,14 @@ const PreventivaModule = {
     const inputCameraRef = ref(null);
     const inputGaleriaRef = ref(null);
     const itemFotoAlvo = ref(null); // item-alvo do próximo arquivo selecionado nos inputs acima (compartilhados entre itens)
+
+    // Assinatura Digital em Tela — capturada ao concluir a inspeção,
+    // estampada no rodapé de Validação do laudo RSG-6301-01.
+    const assinaturaInspetor = ref(null);
+    const assinaturaSupervisor = ref(null);
+    const assinaturaSupervisorNome = ref("");
+    function onAssinaturaInspetor(dataUrl) { assinaturaInspetor.value = dataUrl; }
+    function onAssinaturaSupervisor(dataUrl) { assinaturaSupervisor.value = dataUrl; }
 
     // Ficha de Inspeção Técnica / Laudo Operacional (RSG-6301-01)
     const laudoAberto = ref(false);
@@ -1201,6 +1380,9 @@ const PreventivaModule = {
 
       observacoesGerais.value = "";
       itemFotoAlvo.value = null;
+      assinaturaInspetor.value = null;
+      assinaturaSupervisor.value = null;
+      assinaturaSupervisorNome.value = "";
       view.value = "detalhe";
     }
 
@@ -1211,6 +1393,9 @@ const PreventivaModule = {
       blocosChecklist.value = [];
       observacoesGerais.value = "";
       itemFotoAlvo.value = null;
+      assinaturaInspetor.value = null;
+      assinaturaSupervisor.value = null;
+      assinaturaSupervisorNome.value = "";
     }
 
     function setItemStatus(item, value) {
@@ -1317,6 +1502,18 @@ const PreventivaModule = {
         pushToast("Informe a justificativa em cada item Não Aplicável.", "error");
         return;
       }
+      if (!assinaturaInspetor.value) {
+        pushToast("Colete a assinatura do Inspetor/Técnico Responsável.", "error");
+        return;
+      }
+      if (!assinaturaSupervisor.value) {
+        pushToast("Colete a assinatura do Supervisor da Área/Operador.", "error");
+        return;
+      }
+      if (!assinaturaSupervisorNome.value.trim()) {
+        pushToast("Informe o nome do Supervisor da Área/Operador.", "error");
+        return;
+      }
       salvando.value = true;
       try {
         const idLog = "LOG-" + Date.now();
@@ -1364,6 +1561,16 @@ const PreventivaModule = {
           }
         });
 
+        // Assinaturas digitais (pesadas): mesmo tratamento best-effort das
+        // fotos — o laudo em tela/PDF já usa a versão em memória.
+        postToAppsScript({
+          action: "attachPreventivaAssinaturas",
+          idLog,
+          assinaturaInspetorBase64: assinaturaInspetor.value,
+          assinaturaSupervisorBase64: assinaturaSupervisor.value,
+          assinaturaSupervisorNome: assinaturaSupervisorNome.value.trim(),
+        }).catch(err => console.error("Erro ao enviar assinaturas digitais:", err));
+
         // Estado otimista: adiciona o novo registro em memória para que o card
         // do equipamento já reflita "Realizado Hoje" ao voltar para a lista.
         preventivasHistorico.value.unshift({
@@ -1396,6 +1603,9 @@ const PreventivaModule = {
             observacao: i.observacao, fotoBase64: i.fotoBase64,
           })),
           observacoes: observacoesFinal,
+          assinaturaInspetor: assinaturaInspetor.value,
+          assinaturaSupervisor: assinaturaSupervisor.value,
+          assinaturaSupervisorNome: assinaturaSupervisorNome.value.trim(),
         };
         laudoModoPosSalvar.value = true;
         laudoAberto.value = true;
@@ -1477,6 +1687,62 @@ const PreventivaModule = {
       paginaHistorico.value += 1;
     }
 
+    // ===== Gestão Administrativa (Perfil Administrador): editar/excluir log =====
+    const souAdmin = computed(() => isAdmin(props.user));
+    const excluirAlvo = ref(null);
+    const excluindo = ref(false);
+    const editarAlvo = ref(null);
+    const editando = ref(false);
+
+    function pedirExclusaoLog(h) { excluirAlvo.value = h; }
+    function cancelarExclusaoLog() { excluirAlvo.value = null; }
+    async function confirmarExclusaoLog() {
+      const alvo = excluirAlvo.value;
+      if (!alvo) return;
+      excluindo.value = true;
+      try {
+        const resp = await deleteRecordApi("preventiva", alvo.id);
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao excluir.");
+        preventivasHistorico.value = preventivasHistorico.value.filter(p => p.id !== alvo.id);
+        pushToast("Registro excluído com sucesso!", "success");
+        excluirAlvo.value = null;
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao excluir o registro. Tente novamente.", "error");
+      } finally {
+        excluindo.value = false;
+      }
+    }
+
+    function abrirEdicaoLog(h) {
+      editarAlvo.value = { id: h.id, status: h.status, observacoes: h.observacoes || "" };
+    }
+    function fecharEdicaoLog() { editarAlvo.value = null; }
+    async function salvarEdicaoLog() {
+      const alvo = editarAlvo.value;
+      if (!alvo) return;
+      editando.value = true;
+      try {
+        const statusInspecao = formatarStatusLabel(alvo.status);
+        const resp = await updateRecordApi("preventiva", alvo.id, {
+          statusInspecao, observacoes: alvo.observacoes || "",
+        });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        const registro = preventivasHistorico.value.find(p => p.id === alvo.id);
+        if (registro) {
+          registro.status = alvo.status;
+          registro.observacoes = alvo.observacoes;
+        }
+        pushToast("Registro atualizado com sucesso!", "success");
+        editarAlvo.value = null;
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao atualizar o registro. Tente novamente.", "error");
+      } finally {
+        editando.value = false;
+      }
+    }
+
     function linhasParaExportar() {
       return historicoFiltrado.value.map(h => ({
         "Data/Hora": formatarData(h.data),
@@ -1540,11 +1806,14 @@ const PreventivaModule = {
       itensChecklist, blocosChecklist, temNC, progresso,
       observacoesGerais, salvando,
       inputCameraRef, inputGaleriaRef,
+      assinaturaSupervisorNome, onAssinaturaInspetor, onAssinaturaSupervisor,
       abrirArea, voltarSetores, abrirHistorico, abrirCalendario,
       abrirEquipamento, voltarLista, setItemStatus, abrirCameraItem, abrirGaleriaItem, onFotoSelecionada, removerFotoItem, salvarInspecao,
       ultimaInspecao, formatarStatusLabel, statusCicloEquipamento, formatarData, tagPeriodicidade, corPeriodicidadeItem, tituloBloco,
       filtroAno, filtroMes, filtroArea, filtroBusca, filtroStatus, filtroPeriodicidade, anosDisponiveis,
       historicoFiltrado, historicoPaginado, limparFiltrosHistorico, carregarMaisHistorico,
+      souAdmin, excluirAlvo, excluindo, editarAlvo, editando,
+      pedirExclusaoLog, cancelarExclusaoLog, confirmarExclusaoLog, abrirEdicaoLog, fecharEdicaoLog, salvarEdicaoLog,
       periodicidadeDoEquipamento, exportarExcel, exportarPDF,
       laudoAberto, laudoAtual, laudoModoPosSalvar, fecharLaudo, laudoNovaInspecao, laudoIrInicio, abrirLaudoHistorico,
       calendarioArea, calendarioAno, calendarioAnoAnterior, calendarioAnoProximo, ativosCalendario, statusCelula, CORES_CELULA, perfisNaCelula,
@@ -1847,6 +2116,17 @@ const PreventivaModule = {
             class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
         </div>
 
+        <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">✍️ Assinatura Digital</h4>
+          <assinatura-canvas label="Assinatura do Inspetor/Técnico Responsável" @update="onAssinaturaInspetor"></assinatura-canvas>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Nome do Supervisor da Área/Operador *</label>
+            <input v-model="assinaturaSupervisorNome" type="text" placeholder="Nome completo"
+              class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <assinatura-canvas label="Assinatura do Supervisor da Área/Operador" @update="onAssinaturaSupervisor"></assinatura-canvas>
+        </div>
+
         <button @click="salvarInspecao" :disabled="salvando"
           class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md mt-2 sticky bottom-3">
           <span v-if="salvando" class="spinner"></span>
@@ -1925,10 +2205,22 @@ const PreventivaModule = {
             <span>👤 {{ h.usuario || '—' }}</span>
             <span>{{ formatarData(h.data) }}</span>
           </div>
-          <button @click="abrirLaudoHistorico(h)"
-            class="btn-tap w-full text-xs font-semibold text-sky-600 border border-sky-200 bg-sky-50 rounded-lg py-1.5">
-            👁️ Visualizar Laudo
-          </button>
+          <div class="flex gap-1.5">
+            <button @click="abrirLaudoHistorico(h)"
+              class="btn-tap flex-1 text-xs font-semibold text-sky-600 border border-sky-200 bg-sky-50 rounded-lg py-1.5">
+              👁️ Visualizar Laudo
+            </button>
+            <template v-if="souAdmin">
+              <button @click="abrirEdicaoLog(h)"
+                class="btn-tap text-xs font-semibold text-amber-700 border border-amber-200 bg-amber-50 rounded-lg py-1.5 px-3">
+                ✏️ Editar
+              </button>
+              <button @click="pedirExclusaoLog(h)"
+                class="btn-tap text-xs font-semibold text-red-700 border border-red-200 bg-red-50 rounded-lg py-1.5 px-3">
+                🗑️ Excluir
+              </button>
+            </template>
+          </div>
         </div>
 
         <button v-if="historicoPaginado.length < historicoFiltrado.length" @click="carregarMaisHistorico"
@@ -1941,6 +2233,256 @@ const PreventivaModule = {
     <laudo-preventiva-modal v-if="laudoAberto" :laudo="laudoAtual" :modo-pos-salvar="laudoModoPosSalvar"
       @fechar="fecharLaudo" @nova-inspecao="laudoNovaInspecao" @ir-inicio="laudoIrInicio">
     </laudo-preventiva-modal>
+
+    <!-- MODAL: confirmação de exclusão (Gestão Administrativa) -->
+    <div v-if="excluirAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusaoLog">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-800">Excluir registro?</h3>
+        <p class="text-sm text-slate-600">Esta ação remove definitivamente o registro <span class="font-semibold">#{{ excluirAlvo.id }}</span> ({{ excluirAlvo.equipamento }}) do Histórico. Não pode ser desfeita.</p>
+        <div class="flex gap-2 pt-1">
+          <button @click="cancelarExclusaoLog" :disabled="excluindo"
+            class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-xl">
+            Cancelar
+          </button>
+          <button @click="confirmarExclusaoLog" :disabled="excluindo"
+            class="btn-tap flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl">
+            <span v-if="excluindo" class="spinner"></span>
+            <span>{{ excluindo ? "Excluindo..." : "🗑️ Excluir" }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: edição de registro (Gestão Administrativa) -->
+    <div v-if="editarAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="fecharEdicaoLog">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-800">Editar registro #{{ editarAlvo.id }}</h3>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Status</label>
+          <select v-model="editarAlvo.status" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="C">Conforme</option>
+            <option value="NC">Não Conforme</option>
+            <option value="NA">Não Aplicável</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Observações</label>
+          <textarea v-model="editarAlvo.observacoes" rows="3"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button @click="fecharEdicaoLog" :disabled="editando"
+            class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-xl">
+            Cancelar
+          </button>
+          <button @click="salvarEdicaoLog" :disabled="editando"
+            class="btn-tap flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl">
+            <span v-if="editando" class="spinner"></span>
+            <span>{{ editando ? "Salvando..." : "Salvar" }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   ORDEM DE SERVIÇO DE MANUTENÇÃO CORRETIVA (RSG-6302-02)
+   ========================================================================== */
+const RSG_CODIGO_CORRETIVA = "RSG-6302-02";
+const RSG_TITULO_CORRETIVA = "RSG-6302-02 - Ordem de Serviço de Manutenção Corretiva";
+
+// Tempo total de parada (downtime): diferença entre abertura e encerramento,
+// formatado como "Xd Yh Zmin".
+function formatarDowntime(inicio, fim) {
+  if (!inicio || !fim) return "-";
+  const di = new Date(inicio), df = new Date(fim);
+  if (isNaN(di.getTime()) || isNaN(df.getTime())) return "-";
+  const totalMin = Math.floor((df.getTime() - di.getTime()) / 60000);
+  if (totalMin < 0) return "-";
+  const dias = Math.floor(totalMin / 1440);
+  const horas = Math.floor((totalMin % 1440) / 60);
+  const min = totalMin % 60;
+  const partes = [];
+  if (dias) partes.push(dias + "d");
+  if (dias || horas) partes.push(horas + "h");
+  partes.push(min + "min");
+  return partes.join(" ");
+}
+
+const LaudoCorretivaModal = {
+  props: { laudo: Object, modoPosSalvar: Boolean },
+  emits: ["fechar"],
+  setup(props) {
+    const exportandoPdf = ref(false);
+
+    function formatarDataHora(v) {
+      if (!v) return "-";
+      const d = v instanceof Date ? v : new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function imagensAnexadas(laudo) {
+      return (laudo.anexos || []).filter(a => a.tipo === "imagem");
+    }
+    function documentosAnexados(laudo) {
+      return (laudo.anexos || []).filter(a => a.tipo === "documento");
+    }
+
+    const nomeArquivo = computed(() => {
+      const l = props.laudo || {};
+      const dataParte = String(l.dataAbertura || "").split(" ")[0] || new Date().toISOString().slice(0, 10);
+      const idParte = sanitizarNomeArquivo(l.idChamado || "chamado");
+      return `${RSG_CODIGO_CORRETIVA}_${idParte}_${dataParte}.pdf`;
+    });
+
+    function imprimir() {
+      window.print();
+    }
+
+    function exportarPDF() {
+      if (typeof window.jspdf === "undefined" || typeof window.html2canvas === "undefined") {
+        pushToast("Biblioteca de exportação (PDF) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      const elemento = document.getElementById("laudo-imprimivel");
+      if (!elemento) return;
+      exportandoPdf.value = true;
+      try {
+        const doc = new window.jspdf.jsPDF("p", "pt", "a4");
+        doc.html(elemento, {
+          margin: [24, 24, 24, 24],
+          autoPaging: "text",
+          html2canvas: { scale: 0.72, useCORS: true, backgroundColor: "#ffffff" },
+          width: 547,
+          windowWidth: elemento.scrollWidth || 780,
+          callback: (docFinal) => {
+            docFinal.save(nomeArquivo.value);
+            exportandoPdf.value = false;
+          },
+        });
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao gerar o PDF da ordem de serviço.", "error");
+        exportandoPdf.value = false;
+      }
+    }
+
+    return {
+      exportandoPdf, formatarDataHora, formatarDowntime, imagensAnexadas, documentosAnexados,
+      nomeArquivo, imprimir, exportarPDF, RSG_CODIGO_CORRETIVA, RSG_TITULO_CORRETIVA,
+    };
+  },
+  template: `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+    <div class="bg-white w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[95vh] overflow-y-auto">
+      <div class="no-print sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
+        <h3 class="font-bold text-slate-800">Ordem de Serviço de Manutenção Corretiva</h3>
+        <button v-if="!modoPosSalvar" @click="$emit('fechar')" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+      </div>
+
+      <div id="laudo-imprimivel" class="p-5 space-y-4" v-if="laudo">
+        <!-- Cabeçalho documental -->
+        <div class="border-b-2 border-slate-800 pb-3">
+          <p class="text-xs font-bold text-orange-700 uppercase tracking-wide">Hidrogeron - Sistema de Manutenção</p>
+          <h2 class="text-lg font-extrabold text-slate-900 mt-0.5">{{ RSG_TITULO_CORRETIVA }}</h2>
+          <div class="grid grid-cols-2 gap-2 mt-2 text-xs text-slate-500">
+            <p><span class="font-semibold text-slate-700">Protocolo/Chamado ID:</span> #{{ laudo.idChamado }}</p>
+            <p><span class="font-semibold text-slate-700">Tempo Total de Parada:</span> {{ formatarDowntime(laudo.dataAbertura, laudo.dataConclusao) }}</p>
+            <p><span class="font-semibold text-slate-700">Data/Hora Abertura:</span> {{ formatarDataHora(laudo.dataAbertura) }}</p>
+            <p><span class="font-semibold text-slate-700">Data/Hora Encerramento:</span> {{ formatarDataHora(laudo.dataConclusao) }}</p>
+          </div>
+        </div>
+
+        <!-- Dados do Ativo -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Dados do Ativo</h4>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+            <p><span class="text-slate-400">Setor/Área:</span> <span class="font-medium text-slate-800">{{ laudo.area || '-' }}</span></p>
+            <p><span class="text-slate-400">ID Equipamento:</span> <span class="font-medium text-slate-800">{{ laudo.equipamentoIdDisplay || '-' }}</span></p>
+            <p class="col-span-2"><span class="text-slate-400">Equipamento:</span> <span class="font-medium text-slate-800">{{ laudo.equipamentoNome || '-' }}</span></p>
+            <p class="col-span-2"><span class="text-slate-400">Modelo:</span> <span class="font-medium text-slate-800">{{ laudo.modelo || '-' }}</span></p>
+          </div>
+        </div>
+
+        <!-- Descrição da Falha -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Descrição da Falha</h4>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 space-y-1.5 text-sm">
+            <p><span class="text-slate-400">Solicitante:</span> <span class="font-medium text-slate-800">{{ laudo.solicitante || '-' }}</span></p>
+            <p><span class="text-slate-400">Grau de Prioridade:</span> <span class="font-medium text-slate-800">{{ laudo.prioridade || '-' }}</span></p>
+            <p><span class="text-slate-400">Sintoma/Problema:</span> <span class="text-slate-700">{{ laudo.descricao || '-' }}</span></p>
+          </div>
+        </div>
+
+        <!-- Intervenção Técnica -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Intervenção Técnica</h4>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 space-y-1.5 text-sm">
+            <p><span class="text-slate-400">Técnico Executor:</span> <span class="font-medium text-slate-800">{{ laudo.tecnico || '-' }}</span></p>
+            <p><span class="text-slate-400">Diagnóstico da Causa Raiz:</span> <span class="text-slate-700">{{ laudo.diagnostico || '-' }}</span></p>
+            <p><span class="text-slate-400">Resolução/Ação Tomada:</span> <span class="text-slate-700">{{ laudo.resolucao || '-' }}</span></p>
+            <p><span class="text-slate-400">Peças Substituídas:</span> <span class="text-slate-700">{{ laudo.pecas || 'Nenhuma' }}</span></p>
+          </div>
+        </div>
+
+        <!-- Evidências e Documentos Anexos -->
+        <div v-if="laudo.anexos && laudo.anexos.length">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Evidências e Documentos Anexos</h4>
+          <div v-if="imagensAnexadas(laudo).length" class="flex gap-3 flex-wrap mb-2">
+            <div v-for="img in imagensAnexadas(laudo)" :key="img.id">
+              <img :src="img.dataUrl" class="w-24 h-24 object-cover rounded-lg border border-slate-200" :alt="img.nome" />
+              <p class="text-[10px] text-slate-400 mt-1 text-center w-24 truncate">{{ img.nome }}</p>
+            </div>
+          </div>
+          <div v-if="documentosAnexados(laudo).length" class="space-y-1.5">
+            <div v-for="doc in documentosAnexados(laudo)" :key="doc.id" class="flex items-center gap-2 border border-slate-200 rounded-lg p-2 bg-slate-50">
+              <span class="text-lg">{{ iconeAnexo(doc.nome) }}</span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-semibold text-slate-700 truncate">{{ doc.nome }}</p>
+                <p class="text-[11px] text-slate-400">{{ doc.tamanhoKB }} KB</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rodapé de Validação -->
+        <div class="pt-4">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Validação</h4>
+          <div class="grid grid-cols-2 gap-6 text-xs text-slate-500">
+            <div>
+              <img v-if="laudo.assinaturaTecnico" :src="laudo.assinaturaTecnico" class="h-14 object-contain border-b border-slate-400" alt="Assinatura do Técnico Executor" />
+              <div v-else class="border-b border-slate-400 h-10"></div>
+              <p class="mt-1 font-semibold text-slate-700">Técnico Executor</p>
+              <p class="mt-3">Nome: {{ laudo.tecnico || '______________________________' }}</p>
+              <p class="mt-2">Data: {{ laudo.assinaturaTecnico ? formatarDataHora(laudo.dataConclusao) : '____/____/________' }}</p>
+            </div>
+            <div>
+              <img v-if="laudo.assinaturaSupervisor" :src="laudo.assinaturaSupervisor" class="h-14 object-contain border-b border-slate-400" alt="Assinatura da Supervisão da Área" />
+              <div v-else class="border-b border-slate-400 h-10"></div>
+              <p class="mt-1 font-semibold text-slate-700">Supervisão da Área</p>
+              <p class="mt-3">Nome: {{ laudo.assinaturaSupervisorNome || '______________________________' }}</p>
+              <p class="mt-2">Data: {{ laudo.assinaturaSupervisor ? formatarDataHora(laudo.dataConclusao) : '____/____/________' }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="no-print px-5 pb-5 pt-2 grid grid-cols-2 gap-2 sticky bottom-0 bg-white border-t border-slate-200 mt-2">
+        <button @click="imprimir" class="btn-tap flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          🖨️ Imprimir
+        </button>
+        <button @click="exportarPDF" :disabled="exportandoPdf"
+          class="btn-tap flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm">
+          <span v-if="exportandoPdf" class="spinner"></span>
+          <span>{{ exportandoPdf ? "Gerando..." : "📄 Exportar PDF" }}</span>
+        </button>
+        <button @click="$emit('fechar')" class="btn-tap col-span-2 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          Fechar
+        </button>
+      </div>
+    </div>
   </div>`
 };
 
@@ -1949,6 +2491,7 @@ const PreventivaModule = {
    ========================================================================== */
 const CorretivaModule = {
   props: { user: Object },
+  components: { AssinaturaCanvas, LaudoCorretivaModal },
   setup(props) {
     const areas = AREAS;
     const prioridades = PRIORIDADES;
@@ -1963,17 +2506,114 @@ const CorretivaModule = {
     const chamadosEncerrados = ref([]);
     const loadingChamados = ref(true);
     const erroChamados = ref("");
-    const aba = ref("abertos"); // 'abertos' | 'encerrados'
+    const aba = ref("abertos"); // 'abertos' | 'encerrados' | 'calendario'
+
+    // ===== Calendário de Corretivas =====
+    const ANO_ATUAL_CORRETIVA = new Date().getFullYear();
+    const calendarioCorretivaArea = ref("todas");
+    const calendarioCorretivaAno = ref(ANO_ATUAL_CORRETIVA);
+    const mesCalendarioSelecionado = ref(null); // 1-12, drill-down para o mês
+    const diaCalendarioSelecionado = ref(null); // 1-31, drill-down para o dia
+    function calendarioCorretivaAnoAnterior() { calendarioCorretivaAno.value -= 1; mesCalendarioSelecionado.value = null; diaCalendarioSelecionado.value = null; }
+    function calendarioCorretivaAnoProximo() { calendarioCorretivaAno.value += 1; mesCalendarioSelecionado.value = null; diaCalendarioSelecionado.value = null; }
+    function selecionarMesCalendario(mes) { mesCalendarioSelecionado.value = mes; diaCalendarioSelecionado.value = null; }
+    function selecionarDiaCalendario(dia) { diaCalendarioSelecionado.value = dia; }
+    function voltarMatrizAnual() { mesCalendarioSelecionado.value = null; diaCalendarioSelecionado.value = null; }
+
+    // Cadastro de Equipamentos (só para consulta de ID/Modelo no laudo RSG-6302-02).
+    const todosEquipamentosCorretiva = ref([]);
+    function equipamentoInfo(nome, area) {
+      const nomeAlvo = normalizarTexto(nome);
+      const areaAlvo = normalizarTexto(area);
+      return todosEquipamentosCorretiva.value.find(e =>
+        normalizarTexto(e.nome) === nomeAlvo && (!areaAlvo || normalizarTexto(e.area) === areaAlvo)
+      ) || null;
+    }
+
+    // Lista unificada de evidências do laudo RSG-6302-02: anexos da abertura
+    // (fotos/documentos) + a foto de conclusão (quando houver), como um item
+    // sintético de imagem.
+    function montarAnexosLaudo(chamado, fotoConclusao) {
+      const anexos = (chamado.anexos || []).slice();
+      if (fotoConclusao) {
+        anexos.push({
+          id: "conclusao", tipo: "imagem", nome: "Máquina Reparada (Conclusão)",
+          tamanhoKB: tamanhoKbDataUrl(fotoConclusao), dataUrl: fotoConclusao,
+        });
+      }
+      return anexos;
+    }
+
+    // Upload misto (fotos + documentos), anexado na abertura do chamado
+    // (opcional). Cada item: { id, tipo: 'imagem'|'documento', nome,
+    // tamanhoKB, mime, dataUrl }. Imagens são comprimidas via canvas antes
+    // de virar Base64 (largura máx. 1000px, JPEG 0.7).
+    const anexosAbertura = ref([]);
+    const inputAnexoUniversalRef = ref(null);
+    const enviandoAnexo = ref(false);
+    const anexoZoomAtivo = ref(null);
+
+    async function onAnexosSelecionados(e) {
+      const arquivos = Array.from(e.target.files || []);
+      e.target.value = "";
+      if (!arquivos.length) return;
+      enviandoAnexo.value = true;
+      try {
+        for (const file of arquivos) {
+          try {
+            if (file.type.startsWith("image/")) {
+              const dataUrl = await comprimirImagem(file, 1000, 0.7);
+              anexosAbertura.value.push({
+                id: uid(), tipo: "imagem", nome: file.name,
+                tamanhoKB: tamanhoKbDataUrl(dataUrl), mime: file.type, dataUrl,
+              });
+            } else {
+              const dataUrl = await lerArquivoComoDataUrl(file);
+              anexosAbertura.value.push({
+                id: uid(), tipo: "documento", nome: file.name,
+                tamanhoKB: Math.round(file.size / 1024), mime: file.type, dataUrl,
+              });
+            }
+          } catch (err) {
+            console.error(err);
+            pushToast(`Não foi possível anexar "${file.name}".`, "error");
+          }
+        }
+      } finally {
+        enviandoAnexo.value = false;
+      }
+    }
+    function removerAnexoAbertura(id) {
+      anexosAbertura.value = anexosAbertura.value.filter(a => a.id !== id);
+    }
+    function abrirZoomAnexo(dataUrl) { anexoZoomAtivo.value = dataUrl; }
+    function fecharZoomAnexo() { anexoZoomAtivo.value = null; }
 
     // Modal de atendimento/encerramento
     const modalAberto = ref(false);
     const chamadoSelecionado = ref(null);
+    const diagnosticoTexto = ref("");
     const resolucaoTexto = ref("");
+    const pecasTexto = ref("");
     const fotoConclusaoBase64 = ref(null);
     const fotoConclusaoNome = ref("");
     const encerrando = ref(false);
     const inputCameraConclusaoRef = ref(null);
     const inputGaleriaConclusaoRef = ref(null);
+    const assinaturaTecnico = ref(null);
+    const assinaturaSupervisorCorretiva = ref(null);
+    const assinaturaSupervisorCorretivaNome = ref("");
+    function onAssinaturaTecnico(dataUrl) { assinaturaTecnico.value = dataUrl; }
+    function onAssinaturaSupervisorCorretiva(dataUrl) { assinaturaSupervisorCorretiva.value = dataUrl; }
+
+    // Laudo oficial RSG-6302-02 (Ordem de Serviço de Manutenção Corretiva)
+    const laudoCorretivaAberto = ref(false);
+    const laudoCorretivaAtual = ref(null);
+    const laudoCorretivaModoPosSalvar = ref(false);
+    function fecharLaudoCorretiva() {
+      laudoCorretivaAberto.value = false;
+      laudoCorretivaAtual.value = null;
+    }
 
     async function carregarChamados(opts) {
       const silencioso = opts && opts.silencioso;
@@ -1990,6 +2630,14 @@ const CorretivaModule = {
         chamadosEncerrados.value = todos
           .filter(c => !isStatusChamadoAberto(c.status))
           .sort((a, b) => new Date(b.dataConclusao || b.data) - new Date(a.dataConclusao || a.data));
+
+        const rawEquip = data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || [];
+        todosEquipamentosCorretiva.value = rawEquip.map(e => ({
+          idDisplay: e.ID || e.id || e.Tag || e.TAG || "",
+          nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          modelo: e.Modelo || e.modelo || "",
+          area: e.Area || e.area || "",
+        }));
       } catch (err) {
         console.error(err);
         if (!silencioso) erroChamados.value = "Não foi possível carregar os chamados abertos.";
@@ -2021,12 +2669,29 @@ const CorretivaModule = {
         const resp = await saveCorretivaApi(payload);
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
 
+        const idChamado = (resp && (resp.id || resp.ID || resp.idChamado)) || uid();
+        const anexos = anexosAbertura.value.slice();
+
+        // Anexos (pesados): enviados à parte, um por um, via POST
+        // best-effort — não cabem em query params de uma requisição GET.
+        anexos.forEach(a => {
+          postToAppsScript({
+            action: "attachCorretivaEvidencia",
+            idChamado,
+            fase: "abertura",
+            tipoAnexo: a.tipo,
+            fotoBase64: a.dataUrl,
+            fotoNome: a.nome,
+            mime: a.mime,
+          }).catch(err => console.error("Erro ao enviar anexo:", err));
+        });
+
         form.equipamento = "";
         form.descricao = "";
         form.prioridade = "Média";
 
         chamados.value.unshift({
-          id: (resp && (resp.id || resp.ID || resp.idChamado)) || uid(),
+          id: idChamado,
           area: payload.area,
           equipamento: payload.equipamento,
           descricao: payload.descricaoProblema,
@@ -2034,8 +2699,10 @@ const CorretivaModule = {
           solicitante: payload.solicitante,
           status: "Aberto",
           data: dataAbertura,
+          anexos,
         });
 
+        anexosAbertura.value = [];
         pushToast("Chamado aberto com sucesso!", "success");
       } catch (err) {
         console.error(err);
@@ -2047,9 +2714,14 @@ const CorretivaModule = {
 
     function abrirModalEncerramento(chamado) {
       chamadoSelecionado.value = chamado;
+      diagnosticoTexto.value = "";
       resolucaoTexto.value = "";
+      pecasTexto.value = "";
       fotoConclusaoBase64.value = null;
       fotoConclusaoNome.value = "";
+      assinaturaTecnico.value = null;
+      assinaturaSupervisorCorretiva.value = null;
+      assinaturaSupervisorCorretivaNome.value = "";
       modalAberto.value = true;
     }
 
@@ -2077,19 +2749,49 @@ const CorretivaModule = {
     }
 
     async function confirmarEncerramento() {
+      if (!diagnosticoTexto.value.trim()) {
+        pushToast("Descreva o diagnóstico da causa raiz.", "error");
+        return;
+      }
       if (!resolucaoTexto.value.trim()) {
-        pushToast("Descreva as ações realizadas para encerrar o chamado.", "error");
+        pushToast("Descreva a resolução/ação tomada para encerrar o chamado.", "error");
+        return;
+      }
+      if (!assinaturaTecnico.value) {
+        pushToast("Colete a assinatura do Técnico Executor.", "error");
+        return;
+      }
+      if (!assinaturaSupervisorCorretiva.value) {
+        pushToast("Colete a assinatura do Supervisor da Área.", "error");
+        return;
+      }
+      if (!assinaturaSupervisorCorretivaNome.value.trim()) {
+        pushToast("Informe o nome do Supervisor da Área.", "error");
         return;
       }
       const chamado = chamadoSelecionado.value;
+      const diagnostico = diagnosticoTexto.value.trim();
       const resolucao = resolucaoTexto.value.trim();
+      const pecas = pecasTexto.value.trim();
       const tecnico = props.user.nome || "Produção";
       const foto = fotoConclusaoBase64.value;
       const fotoNomeAnexo = fotoConclusaoNome.value;
+      const supervisorNome = assinaturaSupervisorCorretivaNome.value.trim();
+
+      // Texto único enviado ao campo "Resolucao" da planilha (que não tem
+      // colunas próprias para diagnóstico/peças): preserva os três campos
+      // no mesmo padrão "[TAG] texto" já usado no laudo RSG-6301-01.
+      const resolucaoCompleta = [
+        `[DIAGNOSTICO] ${diagnostico}`,
+        `[RESOLUCAO] ${resolucao}`,
+        pecas ? `[PECAS] ${pecas}` : null,
+      ].filter(Boolean).join(" | ");
 
       encerrando.value = true;
       try {
-        const resp = await closeCorretivaApi(chamado.id, resolucao, tecnico);
+        const resp = await closeCorretivaApi(chamado.id, resolucaoCompleta, tecnico, {
+          diagnostico, pecasSubstituidas: pecas, supervisor: supervisorNome,
+        });
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao encerrar.");
 
         // Evidência fotográfica (pesada): enviada à parte, via POST best-effort,
@@ -2098,10 +2800,21 @@ const CorretivaModule = {
           postToAppsScript({
             action: "attachCorretivaEvidencia",
             idChamado: chamado.id,
+            fase: "conclusao",
             fotoBase64: foto,
             fotoNome: fotoNomeAnexo,
           }).catch(err => console.error("Erro ao enviar evidência fotográfica:", err));
         }
+
+        // Assinaturas digitais (pesadas): mesmo tratamento best-effort da
+        // foto — o laudo em tela/PDF já usa a versão em memória.
+        postToAppsScript({
+          action: "attachCorretivaAssinaturas",
+          idChamado: chamado.id,
+          assinaturaTecnicoBase64: assinaturaTecnico.value,
+          assinaturaSupervisorBase64: assinaturaSupervisorCorretiva.value,
+          assinaturaSupervisorNome: supervisorNome,
+        }).catch(err => console.error("Erro ao enviar assinaturas digitais:", err));
 
         // Retorno confirmado pelo servidor: atualiza o objeto do chamado em
         // memória (estado otimista) e re-renderiza a tela na hora.
@@ -2109,14 +2822,40 @@ const CorretivaModule = {
           || new Date().toISOString().replace("T", " ").substring(0, 16);
         chamado.status = "Fechado";
         chamado.dataConclusao = dataFechamento;
-        chamado.resolucao = resolucao;
-        chamado.tecnico = tecnico + (resolucao ? " - Obs: " + resolucao : "");
+        chamado.resolucao = resolucaoCompleta;
+        chamado.tecnico = tecnico;
+        chamado.fotoConclusao = foto;
 
         chamados.value = chamados.value.filter(c => c.id !== chamado.id);
         chamadosEncerrados.value.unshift(chamado);
 
         pushToast(`Chamado #${chamado.id} encerrado com sucesso!`, "success");
         modalAberto.value = false;
+
+        // Abre a Ordem de Serviço (laudo RSG-6302-02) com os dados completos
+        // desta execução — inclusive assinaturas e fotos, que só existem em
+        // memória (a planilha guarda apenas o texto agregado de resolução).
+        const info = equipamentoInfo(chamado.equipamento, chamado.area);
+        laudoCorretivaAtual.value = {
+          idChamado: chamado.id,
+          area: chamado.area,
+          equipamentoIdDisplay: info ? info.idDisplay : "",
+          equipamentoNome: chamado.equipamento,
+          modelo: info ? info.modelo : "",
+          solicitante: chamado.solicitante,
+          descricao: chamado.descricao,
+          prioridade: chamado.prioridade,
+          dataAbertura: chamado.data,
+          dataConclusao: dataFechamento,
+          tecnico,
+          diagnostico, resolucao, pecas,
+          anexos: montarAnexosLaudo(chamado, foto),
+          assinaturaTecnico: assinaturaTecnico.value,
+          assinaturaSupervisor: assinaturaSupervisorCorretiva.value,
+          assinaturaSupervisorNome: supervisorNome,
+        };
+        laudoCorretivaModoPosSalvar.value = true;
+        laudoCorretivaAberto.value = true;
         chamadoSelecionado.value = null;
 
         // NÃO recarrega a API imediatamente: a planilha pode levar um instante
@@ -2128,6 +2867,95 @@ const CorretivaModule = {
         pushToast("Erro ao encerrar o chamado. Tente novamente.", "error");
       } finally {
         encerrando.value = false;
+      }
+    }
+
+    // Reconstitui os dados do laudo RSG-6302-02 para um chamado já encerrado
+    // do histórico — assinaturas e fotos não são persistidas na planilha, só
+    // no laudo gerado no momento do encerramento (mesma limitação do RSG-6301-01).
+    function abrirLaudoCorretivaHistorico(chamado) {
+      const info = equipamentoInfo(chamado.equipamento, chamado.area);
+      const partes = { diagnostico: "", resolucao: chamado.resolucao || "", pecas: "" };
+      const match = String(chamado.resolucao || "").match(/\[DIAGNOSTICO\]([\s\S]*?)(\||$)/);
+      if (match) partes.diagnostico = match[1].trim();
+      const matchRes = String(chamado.resolucao || "").match(/\[RESOLUCAO\]([\s\S]*?)(\||$)/);
+      if (matchRes) partes.resolucao = matchRes[1].trim();
+      const matchPecas = String(chamado.resolucao || "").match(/\[PECAS\]([\s\S]*?)(\||$)/);
+      if (matchPecas) partes.pecas = matchPecas[1].trim();
+
+      laudoCorretivaAtual.value = {
+        idChamado: chamado.id,
+        area: chamado.area,
+        equipamentoIdDisplay: info ? info.idDisplay : "",
+        equipamentoNome: chamado.equipamento,
+        modelo: info ? info.modelo : "",
+        solicitante: chamado.solicitante,
+        descricao: chamado.descricao,
+        prioridade: chamado.prioridade,
+        dataAbertura: chamado.data,
+        dataConclusao: chamado.dataConclusao,
+        tecnico: chamado.tecnico,
+        diagnostico: partes.diagnostico, resolucao: partes.resolucao, pecas: partes.pecas,
+        anexos: montarAnexosLaudo(chamado, chamado.fotoConclusao || null),
+      };
+      laudoCorretivaModoPosSalvar.value = false;
+      laudoCorretivaAberto.value = true;
+    }
+
+    // ===== Gestão Administrativa (Perfil Administrador): editar/excluir chamado =====
+    const excluirChamadoAlvo = ref(null);
+    const excluindoChamado = ref(false);
+    const editarChamadoAlvo = ref(null);
+    const editandoChamado = ref(false);
+
+    function pedirExclusaoChamado(c) { excluirChamadoAlvo.value = c; }
+    function cancelarExclusaoChamado() { excluirChamadoAlvo.value = null; }
+    async function confirmarExclusaoChamado() {
+      const alvo = excluirChamadoAlvo.value;
+      if (!alvo) return;
+      excluindoChamado.value = true;
+      try {
+        const resp = await deleteRecordApi("corretiva", alvo.id);
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao excluir.");
+        chamados.value = chamados.value.filter(c => c.id !== alvo.id);
+        chamadosEncerrados.value = chamadosEncerrados.value.filter(c => c.id !== alvo.id);
+        pushToast("Chamado excluído com sucesso!", "success");
+        excluirChamadoAlvo.value = null;
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao excluir o chamado. Tente novamente.", "error");
+      } finally {
+        excluindoChamado.value = false;
+      }
+    }
+
+    function abrirEdicaoChamado(c) {
+      editarChamadoAlvo.value = { id: c.id, area: c.area, equipamento: c.equipamento, prioridade: c.prioridade, descricao: c.descricao };
+    }
+    function fecharEdicaoChamado() { editarChamadoAlvo.value = null; }
+    async function salvarEdicaoChamado() {
+      const alvo = editarChamadoAlvo.value;
+      if (!alvo) return;
+      editandoChamado.value = true;
+      try {
+        const resp = await updateRecordApi("corretiva", alvo.id, {
+          area: alvo.area, equipamento: alvo.equipamento, prioridade: alvo.prioridade, descricaoProblema: alvo.descricao,
+        });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
+        const registro = chamados.value.find(c => c.id === alvo.id) || chamadosEncerrados.value.find(c => c.id === alvo.id);
+        if (registro) {
+          registro.area = alvo.area;
+          registro.equipamento = alvo.equipamento;
+          registro.prioridade = alvo.prioridade;
+          registro.descricao = alvo.descricao;
+        }
+        pushToast("Chamado atualizado com sucesso!", "success");
+        editarChamadoAlvo.value = null;
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao atualizar o chamado. Tente novamente.", "error");
+      } finally {
+        editandoChamado.value = false;
       }
     }
 
@@ -2143,14 +2971,90 @@ const CorretivaModule = {
       return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
     }
 
+    // Todos os chamados (abertos + encerrados), filtrados pelo setor do
+    // Calendário — base de todas as contagens e da tabela filtrada abaixo.
+    const todosChamadosCalendario = computed(() => {
+      const alvo = calendarioCorretivaArea.value;
+      const todos = chamados.value.concat(chamadosEncerrados.value);
+      if (alvo === "todas") return todos;
+      return todos.filter(c => String(c.area || "").trim().toLowerCase() === alvo.trim().toLowerCase());
+    });
+
+    // Matriz anual: contagem de abertos (por data de abertura) e encerrados
+    // (por data de encerramento) em cada um dos 12 meses do ano selecionado.
+    const matrizAnualCorretiva = computed(() => {
+      const ano = calendarioCorretivaAno.value;
+      return MESES_PT.map(m => {
+        let abertas = 0, encerradas = 0;
+        todosChamadosCalendario.value.forEach(c => {
+          const dAbertura = new Date(c.data);
+          if (!isNaN(dAbertura.getTime()) && dAbertura.getFullYear() === ano && dAbertura.getMonth() + 1 === m.v && isStatusChamadoAberto(c.status)) abertas++;
+          if (c.dataConclusao) {
+            const dFim = new Date(c.dataConclusao);
+            if (!isNaN(dFim.getTime()) && dFim.getFullYear() === ano && dFim.getMonth() + 1 === m.v) encerradas++;
+          }
+        });
+        return { mes: m.v, label: m.l, abertas, encerradas };
+      });
+    });
+
+    // Calendário mensal (drill-down): contagem por dia do mês selecionado.
+    const diasDoMesCorretiva = computed(() => {
+      if (!mesCalendarioSelecionado.value) return [];
+      const ano = calendarioCorretivaAno.value;
+      const mes = mesCalendarioSelecionado.value;
+      const totalDias = new Date(ano, mes, 0).getDate();
+      const dias = [];
+      for (let dia = 1; dia <= totalDias; dia++) {
+        let abertas = 0, encerradas = 0;
+        todosChamadosCalendario.value.forEach(c => {
+          const dAbertura = new Date(c.data);
+          if (!isNaN(dAbertura.getTime()) && dAbertura.getFullYear() === ano && dAbertura.getMonth() + 1 === mes && dAbertura.getDate() === dia && isStatusChamadoAberto(c.status)) abertas++;
+          if (c.dataConclusao) {
+            const dFim = new Date(c.dataConclusao);
+            if (!isNaN(dFim.getTime()) && dFim.getFullYear() === ano && dFim.getMonth() + 1 === mes && dFim.getDate() === dia) encerradas++;
+          }
+        });
+        dias.push({ dia, abertas, encerradas });
+      }
+      return dias;
+    });
+
+    // Tabela filtrada pelo período clicado no Calendário (mês ou dia); sem
+    // seleção, mostra todos os chamados do ano/setor filtrado.
+    const chamadosCalendarioFiltrados = computed(() => {
+      const ano = calendarioCorretivaAno.value;
+      const mes = mesCalendarioSelecionado.value;
+      const dia = diaCalendarioSelecionado.value;
+      return todosChamadosCalendario.value.filter(c => {
+        const dRef = c.dataConclusao && !isStatusChamadoAberto(c.status) ? new Date(c.dataConclusao) : new Date(c.data);
+        if (isNaN(dRef.getTime()) || dRef.getFullYear() !== ano) return false;
+        if (mes && dRef.getMonth() + 1 !== mes) return false;
+        if (dia && dRef.getDate() !== dia) return false;
+        return true;
+      }).sort((a, b) => new Date(b.data) - new Date(a.data));
+    });
+
     onMounted(carregarChamados);
 
     return {
       areas, prioridades, form, enviando, abrirChamado,
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
-      modalAberto, chamadoSelecionado, resolucaoTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
+      modalAberto, chamadoSelecionado, diagnosticoTexto, resolucaoTexto, pecasTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
       inputCameraConclusaoRef, inputGaleriaConclusaoRef,
+      anexosAbertura, inputAnexoUniversalRef, enviandoAnexo, anexoZoomAtivo,
+      onAnexosSelecionados, removerAnexoAbertura, abrirZoomAnexo, fecharZoomAnexo, equipamentoInfo,
+      assinaturaSupervisorCorretivaNome, onAssinaturaTecnico, onAssinaturaSupervisorCorretiva,
       abrirModalEncerramento, fecharModal, onFotoConclusaoSelecionada, removerFotoConclusao, confirmarEncerramento,
+      laudoCorretivaAberto, laudoCorretivaAtual, laudoCorretivaModoPosSalvar, fecharLaudoCorretiva, abrirLaudoCorretivaHistorico,
+      souAdmin: computed(() => isAdmin(props.user)),
+      meses: MESES_PT,
+      calendarioCorretivaArea, calendarioCorretivaAno, mesCalendarioSelecionado, diaCalendarioSelecionado,
+      calendarioCorretivaAnoAnterior, calendarioCorretivaAnoProximo, selecionarMesCalendario, selecionarDiaCalendario, voltarMatrizAnual,
+      matrizAnualCorretiva, diasDoMesCorretiva, chamadosCalendarioFiltrados,
+      excluirChamadoAlvo, excluindoChamado, editarChamadoAlvo, editandoChamado,
+      pedirExclusaoChamado, cancelarExclusaoChamado, confirmarExclusaoChamado,
+      abrirEdicaoChamado, fecharEdicaoChamado, salvarEdicaoChamado,
     };
   },
   template: `
@@ -2190,6 +3094,31 @@ const CorretivaModule = {
           class="w-full rounded-lg border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
       </div>
 
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Fotos e Documentos (opcional)</label>
+        <button type="button" @click="inputAnexoUniversalRef.click()" :disabled="enviandoAnexo"
+          class="btn-tap w-full flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm disabled:opacity-60">
+          <span v-if="enviandoAnexo" class="spinner"></span>
+          <span>{{ enviandoAnexo ? "Processando..." : "📎 Anexar Fotos ou Documentos" }}</span>
+        </button>
+        <p class="text-[11px] text-slate-400 mt-1">Fotos, manuais técnicos, relatórios de falha (PDF, DOC, XLS, TXT)...</p>
+        <input ref="inputAnexoUniversalRef" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" class="hidden" @change="onAnexosSelecionados" />
+
+        <div v-if="anexosAbertura.length" class="mt-3 space-y-2">
+          <div v-for="a in anexosAbertura" :key="a.id" class="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-lg p-2">
+            <img v-if="a.tipo === 'imagem'" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+              class="w-14 h-14 object-cover rounded-md border border-slate-200 cursor-zoom-in shrink-0" alt="Miniatura do anexo" />
+            <span v-else class="w-14 h-14 flex items-center justify-center text-2xl bg-white rounded-md border border-slate-200 shrink-0">{{ iconeAnexo(a.nome) }}</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-semibold text-slate-700 truncate">{{ a.nome }}</p>
+              <p class="text-[11px] text-slate-400">{{ a.tamanhoKB }} KB</p>
+            </div>
+            <a v-if="a.tipo === 'documento'" :href="a.dataUrl" :download="a.nome" class="btn-tap text-sky-600 text-lg leading-none px-1.5" title="Baixar/visualizar">⬇️</a>
+            <button type="button" @click="removerAnexoAbertura(a.id)" class="btn-tap text-red-600 hover:text-red-800 text-lg leading-none px-1.5">✕</button>
+          </div>
+        </div>
+      </div>
+
       <button @click="abrirChamado" :disabled="enviando"
         class="btn-tap w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl shadow-md">
         <span v-if="enviando" class="spinner"></span>
@@ -2198,8 +3127,8 @@ const CorretivaModule = {
     </div>
 
     <div>
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex gap-2">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div class="flex gap-2 flex-wrap">
           <button @click="aba = 'abertos'" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
             :class="aba === 'abertos' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
             Chamados Abertos
@@ -2207,6 +3136,10 @@ const CorretivaModule = {
           <button @click="aba = 'encerrados'" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
             :class="aba === 'encerrados' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
             Encerrados / Histórico
+          </button>
+          <button @click="aba = 'calendario'" class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border"
+            :class="aba === 'calendario' ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-500'">
+            📅 Calendário de Corretivas
           </button>
         </div>
         <button @click="carregarChamados" class="text-sky-600 text-sm font-semibold btn-tap">↻ Atualizar</button>
@@ -2238,6 +3171,15 @@ const CorretivaModule = {
               </span>
             </div>
             <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
+            <div v-if="c.anexos && c.anexos.length" class="flex items-center gap-1.5 flex-wrap mb-2">
+              <span class="text-[11px] font-bold text-slate-500">📎 {{ c.anexos.length }} anexo(s)</span>
+              <img v-for="a in c.anexos.filter(x => x.tipo === 'imagem')" :key="a.id" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+                class="w-9 h-9 object-cover rounded border border-slate-200 cursor-zoom-in" alt="Miniatura do anexo" />
+              <a v-for="a in c.anexos.filter(x => x.tipo === 'documento')" :key="a.id" :href="a.dataUrl" :download="a.nome" :title="a.nome"
+                class="text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-1 flex items-center gap-1 max-w-[110px]">
+                <span>{{ iconeAnexo(a.nome) }}</span><span class="truncate">{{ a.nome }}</span>
+              </a>
+            </div>
             <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mb-3">
               <span>👤 {{ c.solicitante || "—" }}</span>
               <span class="flex items-center gap-2">
@@ -2249,6 +3191,16 @@ const CorretivaModule = {
               class="btn-tap w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
               ⚙️ Atender / Encerrar Chamado
             </button>
+            <div v-if="souAdmin" class="flex gap-1.5 mt-1.5">
+              <button @click="abrirEdicaoChamado(c)"
+                class="btn-tap flex-1 text-xs font-semibold text-amber-700 border border-amber-200 bg-amber-50 rounded-lg py-1.5">
+                ✏️ Editar
+              </button>
+              <button @click="pedirExclusaoChamado(c)"
+                class="btn-tap flex-1 text-xs font-semibold text-red-700 border border-red-200 bg-red-50 rounded-lg py-1.5">
+                🗑️ Excluir
+              </button>
+            </div>
           </div>
         </div>
       </template>
@@ -2273,11 +3225,114 @@ const CorretivaModule = {
             </div>
             <p class="text-sm text-slate-600 mb-1"><span class="text-slate-400">Falha relatada:</span> {{ c.descricao }}</p>
             <p v-if="c.resolucao" class="text-sm text-slate-600 mb-2"><span class="text-slate-400">Resolução:</span> {{ c.resolucao }}</p>
-            <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2">
+            <div v-if="c.anexos && c.anexos.length" class="flex items-center gap-1.5 flex-wrap mb-2">
+              <span class="text-[11px] font-bold text-slate-500">📎 {{ c.anexos.length }} anexo(s)</span>
+              <img v-for="a in c.anexos.filter(x => x.tipo === 'imagem')" :key="a.id" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+                class="w-9 h-9 object-cover rounded border border-slate-200 cursor-zoom-in" alt="Miniatura do anexo" />
+              <a v-for="a in c.anexos.filter(x => x.tipo === 'documento')" :key="a.id" :href="a.dataUrl" :download="a.nome" :title="a.nome"
+                class="text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-1 flex items-center gap-1 max-w-[110px]">
+                <span>{{ iconeAnexo(a.nome) }}</span><span class="truncate">{{ a.nome }}</span>
+              </a>
+            </div>
+            <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2 mb-2">
               <span>🔧 {{ c.tecnico || c.solicitante || "—" }}</span>
               <span>{{ formatarData(c.dataConclusao || c.data) }}</span>
             </div>
+            <button @click="abrirLaudoCorretivaHistorico(c)"
+              class="btn-tap w-full text-xs font-semibold text-sky-600 border border-sky-200 bg-sky-50 rounded-lg py-1.5">
+              👁️ Ver Ordem de Serviço (RSG-6302-02)
+            </button>
+            <div v-if="souAdmin" class="flex gap-1.5 mt-1.5">
+              <button @click="abrirEdicaoChamado(c)"
+                class="btn-tap flex-1 text-xs font-semibold text-amber-700 border border-amber-200 bg-amber-50 rounded-lg py-1.5">
+                ✏️ Editar
+              </button>
+              <button @click="pedirExclusaoChamado(c)"
+                class="btn-tap flex-1 text-xs font-semibold text-red-700 border border-red-200 bg-red-50 rounded-lg py-1.5">
+                🗑️ Excluir
+              </button>
+            </div>
           </div>
+        </div>
+      </template>
+
+      <!-- ABA: Calendário de Corretivas -->
+      <template v-else-if="aba === 'calendario'">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-3 mb-4">
+          <select v-model="calendarioCorretivaArea" class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="todas">Setor: Todos</option>
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+
+          <div class="flex items-center justify-center gap-4">
+            <button @click="calendarioCorretivaAnoAnterior" class="btn-tap w-9 h-9 rounded-full border border-slate-300 text-slate-600 font-bold flex items-center justify-center">‹</button>
+            <span class="font-extrabold text-xl text-slate-800 w-20 text-center tabular-nums">{{ calendarioCorretivaAno }}</span>
+            <button @click="calendarioCorretivaAnoProximo" class="btn-tap w-9 h-9 rounded-full border border-slate-300 text-slate-600 font-bold flex items-center justify-center">›</button>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+            <span class="flex items-center gap-1.5">🔴 Abertas/Pendentes</span>
+            <span class="flex items-center gap-1.5">🟢 Encerradas/Concluídas</span>
+          </div>
+        </div>
+
+        <!-- Matriz Anual (12 meses) -->
+        <div v-if="!mesCalendarioSelecionado" class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+          <button v-for="m in matrizAnualCorretiva" :key="m.mes" @click="selecionarMesCalendario(m.mes)"
+            class="btn-tap bg-white rounded-xl border border-slate-200 p-3 text-left hover:border-sky-300 hover:shadow-md transition-all">
+            <p class="text-sm font-bold text-slate-700">{{ m.label }}</p>
+            <div class="flex gap-3 mt-2 text-xs font-bold">
+              <span class="text-red-600">🔴 {{ m.abertas }}</span>
+              <span class="text-emerald-600">🟢 {{ m.encerradas }}</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Calendário Mensal (drill-down por dia) -->
+        <div v-else class="mb-4 space-y-3">
+          <button @click="voltarMatrizAnual" class="btn-tap text-sm font-semibold text-sky-600 flex items-center gap-1">‹ Voltar à Matriz Anual</button>
+          <p class="text-sm font-bold text-slate-700">{{ meses.find(m => m.v === mesCalendarioSelecionado).l }} de {{ calendarioCorretivaAno }}</p>
+          <div class="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+            <button v-for="d in diasDoMesCorretiva" :key="d.dia" @click="selecionarDiaCalendario(d.dia)"
+              class="btn-tap rounded-lg border p-1.5 text-center"
+              :class="diaCalendarioSelecionado === d.dia ? 'bg-sky-600 border-sky-600 text-white' : 'bg-white border-slate-200 text-slate-600'">
+              <p class="text-xs font-bold">{{ d.dia }}</p>
+              <p v-if="d.abertas" class="text-[10px]" :class="diaCalendarioSelecionado === d.dia ? 'text-white' : 'text-red-500'">🔴{{ d.abertas }}</p>
+              <p v-if="d.encerradas" class="text-[10px]" :class="diaCalendarioSelecionado === d.dia ? 'text-white' : 'text-emerald-500'">🟢{{ d.encerradas }}</p>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tabela filtrada pelo período selecionado -->
+        <div class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table class="text-sm w-full border-collapse">
+            <thead>
+              <tr class="bg-slate-800 text-white text-xs">
+                <th class="px-3 py-2 text-left whitespace-nowrap">#</th>
+                <th class="px-3 py-2 text-left">Equipamento</th>
+                <th class="px-3 py-2 text-left">Setor</th>
+                <th class="px-3 py-2 text-left">Status</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in chamadosCalendarioFiltrados" :key="c.id" class="border-t border-slate-100">
+                <td class="px-3 py-2 font-mono text-xs text-slate-400 whitespace-nowrap">#{{ c.id }}</td>
+                <td class="px-3 py-2 text-slate-700">{{ c.equipamento }}</td>
+                <td class="px-3 py-2 text-slate-500">{{ c.area }}</td>
+                <td class="px-3 py-2">
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                    :class="String(c.status).toLowerCase() === 'aberto' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'">
+                    {{ c.status }}
+                  </span>
+                </td>
+                <td class="px-3 py-2 text-slate-400 whitespace-nowrap">{{ formatarData(c.dataConclusao || c.data) }}</td>
+              </tr>
+              <tr v-if="chamadosCalendarioFiltrados.length === 0">
+                <td colspan="5" class="px-3 py-6 text-center text-slate-400">Nenhum chamado no período selecionado.</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </template>
     </div>
@@ -2302,8 +3357,20 @@ const CorretivaModule = {
           </div>
 
           <div>
-            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Ações realizadas / Descrição do reparo *</label>
-            <textarea v-model="resolucaoTexto" rows="4" placeholder="Descreva o que foi feito para resolver o problema..."
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Diagnóstico da Causa Raiz *</label>
+            <textarea v-model="diagnosticoTexto" rows="3" placeholder="O que causou a falha..."
+              class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Resolução / Ação Tomada *</label>
+            <textarea v-model="resolucaoTexto" rows="3" placeholder="Descreva o que foi feito para resolver o problema..."
+              class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Peças Substituídas (opcional)</label>
+            <textarea v-model="pecasTexto" rows="2" placeholder="Ex: Rolamento 6205, Vedação de borracha..."
               class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
           </div>
 
@@ -2329,17 +3396,97 @@ const CorretivaModule = {
             </div>
           </div>
 
+          <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-4">
+            <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">✍️ Assinatura Digital</h4>
+            <assinatura-canvas label="Assinatura do Técnico Executor" @update="onAssinaturaTecnico"></assinatura-canvas>
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Nome do Supervisor da Área *</label>
+              <input v-model="assinaturaSupervisorCorretivaNome" type="text" placeholder="Nome completo"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            </div>
+            <assinatura-canvas label="Assinatura do Supervisor da Área" @update="onAssinaturaSupervisorCorretiva"></assinatura-canvas>
+          </div>
+
           <div class="flex gap-2 pt-1">
             <button @click="fecharModal" :disabled="encerrando"
               class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-3 rounded-xl">
               Cancelar
             </button>
-            <button @click="confirmarEncerramento" :disabled="encerrando || !resolucaoTexto.trim()"
+            <button @click="confirmarEncerramento" :disabled="encerrando || !resolucaoTexto.trim() || !diagnosticoTexto.trim()"
               class="btn-tap flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl shadow-md">
               <span v-if="encerrando" class="spinner"></span>
               <span>{{ encerrando ? "Encerrando..." : "Concluir e Fechar Chamado" }}</span>
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zoom/preview de imagem anexada -->
+    <div v-if="anexoZoomAtivo" class="no-print fixed inset-0 z-[60] bg-slate-900/90 flex items-center justify-center p-4" @click="fecharZoomAnexo">
+      <img :src="anexoZoomAtivo" class="max-w-full max-h-full rounded-lg shadow-2xl" alt="Anexo em zoom" />
+      <button @click="fecharZoomAnexo" class="btn-tap absolute top-4 right-4 text-white text-3xl leading-none">✕</button>
+    </div>
+
+    <laudo-corretiva-modal v-if="laudoCorretivaAberto" :laudo="laudoCorretivaAtual" :modo-pos-salvar="laudoCorretivaModoPosSalvar"
+      @fechar="fecharLaudoCorretiva">
+    </laudo-corretiva-modal>
+
+    <!-- MODAL: confirmação de exclusão (Gestão Administrativa) -->
+    <div v-if="excluirChamadoAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusaoChamado">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-800">Excluir chamado?</h3>
+        <p class="text-sm text-slate-600">Esta ação remove definitivamente o chamado <span class="font-semibold">#{{ excluirChamadoAlvo.id }}</span> ({{ excluirChamadoAlvo.equipamento }}). Não pode ser desfeita.</p>
+        <div class="flex gap-2 pt-1">
+          <button @click="cancelarExclusaoChamado" :disabled="excluindoChamado"
+            class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-xl">
+            Cancelar
+          </button>
+          <button @click="confirmarExclusaoChamado" :disabled="excluindoChamado"
+            class="btn-tap flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl">
+            <span v-if="excluindoChamado" class="spinner"></span>
+            <span>{{ excluindoChamado ? "Excluindo..." : "🗑️ Excluir" }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: edição de chamado (Gestão Administrativa) -->
+    <div v-if="editarChamadoAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="fecharEdicaoChamado">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-800">Editar chamado #{{ editarChamadoAlvo.id }}</h3>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Área</label>
+          <select v-model="editarChamadoAlvo.area" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Equipamento</label>
+          <input v-model="editarChamadoAlvo.equipamento" type="text"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Prioridade</label>
+          <select v-model="editarChamadoAlvo.prioridade" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option v-for="p in prioridades" :key="p.value" :value="p.value">{{ p.value }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Descrição</label>
+          <textarea v-model="editarChamadoAlvo.descricao" rows="3"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button @click="fecharEdicaoChamado" :disabled="editandoChamado"
+            class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-xl">
+            Cancelar
+          </button>
+          <button @click="salvarEdicaoChamado" :disabled="editandoChamado"
+            class="btn-tap flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl">
+            <span v-if="editandoChamado" class="spinner"></span>
+            <span>{{ editandoChamado ? "Salvando..." : "Salvar" }}</span>
+          </button>
         </div>
       </div>
     </div>
