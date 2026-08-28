@@ -616,6 +616,58 @@ function isAdmin(user) {
   return normalizarTexto(user && user.perfil) === "administrador";
 }
 
+/* ==========================================================================
+   UPLOAD MISTO (fotos + documentos) — Corretiva, abertura de chamado
+   ========================================================================== */
+function lerArquivoComoDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Erro ao ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Compressão de imagem via canvas: redimensiona para largura máxima e
+// reexporta como JPEG na qualidade informada, reduzindo o tamanho do Base64
+// persistido (fotos de celular facilmente passam de 3-5MB sem isso).
+function comprimirImagem(file, maxWidth, qualidade) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const escala = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * escala);
+        canvas.height = Math.round(img.height * escala);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", qualidade));
+      };
+      img.onerror = () => reject(new Error("Erro ao carregar a imagem."));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Erro ao ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Tamanho aproximado (KB) de uma dataURL Base64, sem precisar decodificar.
+function tamanhoKbDataUrl(dataUrl) {
+  const base64 = String(dataUrl || "").split(",")[1] || "";
+  return Math.round((base64.length * 0.75) / 1024);
+}
+
+function iconeAnexo(nome) {
+  const ext = String(nome || "").split(".").pop().toLowerCase();
+  if (ext === "pdf") return "📄";
+  if (ext === "doc" || ext === "docx") return "📝";
+  if (ext === "xls" || ext === "xlsx") return "📊";
+  if (ext === "txt") return "📃";
+  return "📎";
+}
+
 function formatarDataCurta(d) {
   if (!d) return "-";
   const dt = d instanceof Date ? d : new Date(d);
@@ -2271,6 +2323,13 @@ const LaudoCorretivaModal = {
       return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
     }
 
+    function imagensAnexadas(laudo) {
+      return (laudo.anexos || []).filter(a => a.tipo === "imagem");
+    }
+    function documentosAnexados(laudo) {
+      return (laudo.anexos || []).filter(a => a.tipo === "documento");
+    }
+
     const nomeArquivo = computed(() => {
       const l = props.laudo || {};
       const dataParte = String(l.dataAbertura || "").split(" ")[0] || new Date().toISOString().slice(0, 10);
@@ -2310,7 +2369,10 @@ const LaudoCorretivaModal = {
       }
     }
 
-    return { exportandoPdf, formatarDataHora, formatarDowntime, nomeArquivo, imprimir, exportarPDF, RSG_CODIGO_CORRETIVA, RSG_TITULO_CORRETIVA };
+    return {
+      exportandoPdf, formatarDataHora, formatarDowntime, imagensAnexadas, documentosAnexados,
+      nomeArquivo, imprimir, exportarPDF, RSG_CODIGO_CORRETIVA, RSG_TITULO_CORRETIVA,
+    };
   },
   template: `
   <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
@@ -2365,17 +2427,22 @@ const LaudoCorretivaModal = {
           </div>
         </div>
 
-        <!-- Evidências Fotográficas -->
-        <div v-if="laudo.fotoProblema || laudo.fotoConclusao">
-          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Evidências Fotográficas</h4>
-          <div class="flex gap-4">
-            <div v-if="laudo.fotoProblema">
-              <img :src="laudo.fotoProblema" class="w-28 h-28 object-cover rounded-lg border border-slate-200" alt="Foto do problema" />
-              <p class="text-[11px] text-slate-400 mt-1 text-center">Problema</p>
+        <!-- Evidências e Documentos Anexos -->
+        <div v-if="laudo.anexos && laudo.anexos.length">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Evidências e Documentos Anexos</h4>
+          <div v-if="imagensAnexadas(laudo).length" class="flex gap-3 flex-wrap mb-2">
+            <div v-for="img in imagensAnexadas(laudo)" :key="img.id">
+              <img :src="img.dataUrl" class="w-24 h-24 object-cover rounded-lg border border-slate-200" :alt="img.nome" />
+              <p class="text-[10px] text-slate-400 mt-1 text-center w-24 truncate">{{ img.nome }}</p>
             </div>
-            <div v-if="laudo.fotoConclusao">
-              <img :src="laudo.fotoConclusao" class="w-28 h-28 object-cover rounded-lg border border-slate-200" alt="Foto da máquina reparada" />
-              <p class="text-[11px] text-slate-400 mt-1 text-center">Máquina Reparada</p>
+          </div>
+          <div v-if="documentosAnexados(laudo).length" class="space-y-1.5">
+            <div v-for="doc in documentosAnexados(laudo)" :key="doc.id" class="flex items-center gap-2 border border-slate-200 rounded-lg p-2 bg-slate-50">
+              <span class="text-lg">{{ iconeAnexo(doc.nome) }}</span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-semibold text-slate-700 truncate">{{ doc.nome }}</p>
+                <p class="text-[11px] text-slate-400">{{ doc.tamanhoKB }} KB</p>
+              </div>
             </div>
           </div>
         </div>
@@ -2463,26 +2530,64 @@ const CorretivaModule = {
       ) || null;
     }
 
-    // Foto do problema, anexada na abertura do chamado (opcional).
-    const fotoProblemaBase64 = ref(null);
-    const fotoProblemaNome = ref("");
-    const inputCameraProblemaRef = ref(null);
-    const inputGaleriaProblemaRef = ref(null);
-    function onFotoProblemaSelecionada(e) {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        fotoProblemaBase64.value = reader.result;
-        fotoProblemaNome.value = file.name;
-      };
-      reader.readAsDataURL(file);
+    // Lista unificada de evidências do laudo RSG-6302-02: anexos da abertura
+    // (fotos/documentos) + a foto de conclusão (quando houver), como um item
+    // sintético de imagem.
+    function montarAnexosLaudo(chamado, fotoConclusao) {
+      const anexos = (chamado.anexos || []).slice();
+      if (fotoConclusao) {
+        anexos.push({
+          id: "conclusao", tipo: "imagem", nome: "Máquina Reparada (Conclusão)",
+          tamanhoKB: tamanhoKbDataUrl(fotoConclusao), dataUrl: fotoConclusao,
+        });
+      }
+      return anexos;
+    }
+
+    // Upload misto (fotos + documentos), anexado na abertura do chamado
+    // (opcional). Cada item: { id, tipo: 'imagem'|'documento', nome,
+    // tamanhoKB, mime, dataUrl }. Imagens são comprimidas via canvas antes
+    // de virar Base64 (largura máx. 1000px, JPEG 0.7).
+    const anexosAbertura = ref([]);
+    const inputAnexoUniversalRef = ref(null);
+    const enviandoAnexo = ref(false);
+    const anexoZoomAtivo = ref(null);
+
+    async function onAnexosSelecionados(e) {
+      const arquivos = Array.from(e.target.files || []);
       e.target.value = "";
+      if (!arquivos.length) return;
+      enviandoAnexo.value = true;
+      try {
+        for (const file of arquivos) {
+          try {
+            if (file.type.startsWith("image/")) {
+              const dataUrl = await comprimirImagem(file, 1000, 0.7);
+              anexosAbertura.value.push({
+                id: uid(), tipo: "imagem", nome: file.name,
+                tamanhoKB: tamanhoKbDataUrl(dataUrl), mime: file.type, dataUrl,
+              });
+            } else {
+              const dataUrl = await lerArquivoComoDataUrl(file);
+              anexosAbertura.value.push({
+                id: uid(), tipo: "documento", nome: file.name,
+                tamanhoKB: Math.round(file.size / 1024), mime: file.type, dataUrl,
+              });
+            }
+          } catch (err) {
+            console.error(err);
+            pushToast(`Não foi possível anexar "${file.name}".`, "error");
+          }
+        }
+      } finally {
+        enviandoAnexo.value = false;
+      }
     }
-    function removerFotoProblema() {
-      fotoProblemaBase64.value = null;
-      fotoProblemaNome.value = "";
+    function removerAnexoAbertura(id) {
+      anexosAbertura.value = anexosAbertura.value.filter(a => a.id !== id);
     }
+    function abrirZoomAnexo(dataUrl) { anexoZoomAtivo.value = dataUrl; }
+    function fecharZoomAnexo() { anexoZoomAtivo.value = null; }
 
     // Modal de atendimento/encerramento
     const modalAberto = ref(false);
@@ -2565,19 +2670,21 @@ const CorretivaModule = {
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
 
         const idChamado = (resp && (resp.id || resp.ID || resp.idChamado)) || uid();
-        const foto = fotoProblemaBase64.value;
+        const anexos = anexosAbertura.value.slice();
 
-        // Foto do problema (pesada): enviada à parte, via POST best-effort,
-        // pois não cabe em query params de uma requisição GET.
-        if (foto) {
+        // Anexos (pesados): enviados à parte, um por um, via POST
+        // best-effort — não cabem em query params de uma requisição GET.
+        anexos.forEach(a => {
           postToAppsScript({
             action: "attachCorretivaEvidencia",
             idChamado,
             fase: "abertura",
-            fotoBase64: foto,
-            fotoNome: fotoProblemaNome.value,
-          }).catch(err => console.error("Erro ao enviar evidência fotográfica:", err));
-        }
+            tipoAnexo: a.tipo,
+            fotoBase64: a.dataUrl,
+            fotoNome: a.nome,
+            mime: a.mime,
+          }).catch(err => console.error("Erro ao enviar anexo:", err));
+        });
 
         form.equipamento = "";
         form.descricao = "";
@@ -2592,10 +2699,10 @@ const CorretivaModule = {
           solicitante: payload.solicitante,
           status: "Aberto",
           data: dataAbertura,
-          fotoProblema: foto,
+          anexos,
         });
 
-        removerFotoProblema();
+        anexosAbertura.value = [];
         pushToast("Chamado aberto com sucesso!", "success");
       } catch (err) {
         console.error(err);
@@ -2742,8 +2849,7 @@ const CorretivaModule = {
           dataConclusao: dataFechamento,
           tecnico,
           diagnostico, resolucao, pecas,
-          fotoProblema: chamado.fotoProblema || null,
-          fotoConclusao: foto,
+          anexos: montarAnexosLaudo(chamado, foto),
           assinaturaTecnico: assinaturaTecnico.value,
           assinaturaSupervisor: assinaturaSupervisorCorretiva.value,
           assinaturaSupervisorNome: supervisorNome,
@@ -2790,8 +2896,7 @@ const CorretivaModule = {
         dataConclusao: chamado.dataConclusao,
         tecnico: chamado.tecnico,
         diagnostico: partes.diagnostico, resolucao: partes.resolucao, pecas: partes.pecas,
-        fotoProblema: chamado.fotoProblema || null,
-        fotoConclusao: chamado.fotoConclusao || null,
+        anexos: montarAnexosLaudo(chamado, chamado.fotoConclusao || null),
       };
       laudoCorretivaModoPosSalvar.value = false;
       laudoCorretivaAberto.value = true;
@@ -2937,8 +3042,8 @@ const CorretivaModule = {
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
       modalAberto, chamadoSelecionado, diagnosticoTexto, resolucaoTexto, pecasTexto, fotoConclusaoBase64, fotoConclusaoNome, encerrando,
       inputCameraConclusaoRef, inputGaleriaConclusaoRef,
-      fotoProblemaBase64, fotoProblemaNome, inputCameraProblemaRef, inputGaleriaProblemaRef,
-      onFotoProblemaSelecionada, removerFotoProblema, equipamentoInfo,
+      anexosAbertura, inputAnexoUniversalRef, enviandoAnexo, anexoZoomAtivo,
+      onAnexosSelecionados, removerAnexoAbertura, abrirZoomAnexo, fecharZoomAnexo, equipamentoInfo,
       assinaturaSupervisorCorretivaNome, onAssinaturaTecnico, onAssinaturaSupervisorCorretiva,
       abrirModalEncerramento, fecharModal, onFotoConclusaoSelecionada, removerFotoConclusao, confirmarEncerramento,
       laudoCorretivaAberto, laudoCorretivaAtual, laudoCorretivaModoPosSalvar, fecharLaudoCorretiva, abrirLaudoCorretivaHistorico,
@@ -2990,23 +3095,27 @@ const CorretivaModule = {
       </div>
 
       <div>
-        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Foto do Problema (opcional)</label>
-        <div class="flex gap-2">
-          <button type="button" @click="inputCameraProblemaRef.click()"
-            class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
-            📷 Tirar Foto
-          </button>
-          <button type="button" @click="inputGaleriaProblemaRef.click()"
-            class="btn-tap flex-1 flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
-            📁 Selecionar Arquivo
-          </button>
-        </div>
-        <input ref="inputCameraProblemaRef" type="file" accept="image/*" capture="environment" class="hidden" @change="onFotoProblemaSelecionada" />
-        <input ref="inputGaleriaProblemaRef" type="file" accept="image/*" class="hidden" @change="onFotoProblemaSelecionada" />
-        <div v-if="fotoProblemaBase64" class="mt-3 flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-lg p-2">
-          <img :src="fotoProblemaBase64" class="w-16 h-16 object-cover rounded-md border border-slate-200" alt="Prévia da foto do problema" />
-          <p class="text-xs text-slate-600 truncate flex-1">{{ fotoProblemaNome }}</p>
-          <button type="button" @click="removerFotoProblema" class="btn-tap text-red-600 hover:text-red-800 text-lg leading-none px-2">✕</button>
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Fotos e Documentos (opcional)</label>
+        <button type="button" @click="inputAnexoUniversalRef.click()" :disabled="enviandoAnexo"
+          class="btn-tap w-full flex items-center justify-center gap-1.5 bg-white border-2 border-slate-300 text-slate-700 font-semibold py-2.5 rounded-lg text-sm disabled:opacity-60">
+          <span v-if="enviandoAnexo" class="spinner"></span>
+          <span>{{ enviandoAnexo ? "Processando..." : "📎 Anexar Fotos ou Documentos" }}</span>
+        </button>
+        <p class="text-[11px] text-slate-400 mt-1">Fotos, manuais técnicos, relatórios de falha (PDF, DOC, XLS, TXT)...</p>
+        <input ref="inputAnexoUniversalRef" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" class="hidden" @change="onAnexosSelecionados" />
+
+        <div v-if="anexosAbertura.length" class="mt-3 space-y-2">
+          <div v-for="a in anexosAbertura" :key="a.id" class="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-lg p-2">
+            <img v-if="a.tipo === 'imagem'" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+              class="w-14 h-14 object-cover rounded-md border border-slate-200 cursor-zoom-in shrink-0" alt="Miniatura do anexo" />
+            <span v-else class="w-14 h-14 flex items-center justify-center text-2xl bg-white rounded-md border border-slate-200 shrink-0">{{ iconeAnexo(a.nome) }}</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-semibold text-slate-700 truncate">{{ a.nome }}</p>
+              <p class="text-[11px] text-slate-400">{{ a.tamanhoKB }} KB</p>
+            </div>
+            <a v-if="a.tipo === 'documento'" :href="a.dataUrl" :download="a.nome" class="btn-tap text-sky-600 text-lg leading-none px-1.5" title="Baixar/visualizar">⬇️</a>
+            <button type="button" @click="removerAnexoAbertura(a.id)" class="btn-tap text-red-600 hover:text-red-800 text-lg leading-none px-1.5">✕</button>
+          </div>
         </div>
       </div>
 
@@ -3062,6 +3171,15 @@ const CorretivaModule = {
               </span>
             </div>
             <p class="text-sm text-slate-600 mb-2">{{ c.descricao }}</p>
+            <div v-if="c.anexos && c.anexos.length" class="flex items-center gap-1.5 flex-wrap mb-2">
+              <span class="text-[11px] font-bold text-slate-500">📎 {{ c.anexos.length }} anexo(s)</span>
+              <img v-for="a in c.anexos.filter(x => x.tipo === 'imagem')" :key="a.id" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+                class="w-9 h-9 object-cover rounded border border-slate-200 cursor-zoom-in" alt="Miniatura do anexo" />
+              <a v-for="a in c.anexos.filter(x => x.tipo === 'documento')" :key="a.id" :href="a.dataUrl" :download="a.nome" :title="a.nome"
+                class="text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-1 flex items-center gap-1 max-w-[110px]">
+                <span>{{ iconeAnexo(a.nome) }}</span><span class="truncate">{{ a.nome }}</span>
+              </a>
+            </div>
             <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mb-3">
               <span>👤 {{ c.solicitante || "—" }}</span>
               <span class="flex items-center gap-2">
@@ -3107,6 +3225,15 @@ const CorretivaModule = {
             </div>
             <p class="text-sm text-slate-600 mb-1"><span class="text-slate-400">Falha relatada:</span> {{ c.descricao }}</p>
             <p v-if="c.resolucao" class="text-sm text-slate-600 mb-2"><span class="text-slate-400">Resolução:</span> {{ c.resolucao }}</p>
+            <div v-if="c.anexos && c.anexos.length" class="flex items-center gap-1.5 flex-wrap mb-2">
+              <span class="text-[11px] font-bold text-slate-500">📎 {{ c.anexos.length }} anexo(s)</span>
+              <img v-for="a in c.anexos.filter(x => x.tipo === 'imagem')" :key="a.id" :src="a.dataUrl" @click="abrirZoomAnexo(a.dataUrl)"
+                class="w-9 h-9 object-cover rounded border border-slate-200 cursor-zoom-in" alt="Miniatura do anexo" />
+              <a v-for="a in c.anexos.filter(x => x.tipo === 'documento')" :key="a.id" :href="a.dataUrl" :download="a.nome" :title="a.nome"
+                class="text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-1 flex items-center gap-1 max-w-[110px]">
+                <span>{{ iconeAnexo(a.nome) }}</span><span class="truncate">{{ a.nome }}</span>
+              </a>
+            </div>
             <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-100 pt-2 mt-2 mb-2">
               <span>🔧 {{ c.tecnico || c.solicitante || "—" }}</span>
               <span>{{ formatarData(c.dataConclusao || c.data) }}</span>
@@ -3293,6 +3420,12 @@ const CorretivaModule = {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Zoom/preview de imagem anexada -->
+    <div v-if="anexoZoomAtivo" class="no-print fixed inset-0 z-[60] bg-slate-900/90 flex items-center justify-center p-4" @click="fecharZoomAnexo">
+      <img :src="anexoZoomAtivo" class="max-w-full max-h-full rounded-lg shadow-2xl" alt="Anexo em zoom" />
+      <button @click="fecharZoomAnexo" class="btn-tap absolute top-4 right-4 text-white text-3xl leading-none">✕</button>
     </div>
 
     <laudo-corretiva-modal v-if="laudoCorretivaAberto" :laudo="laudoCorretivaAtual" :modo-pos-salvar="laudoCorretivaModoPosSalvar"
