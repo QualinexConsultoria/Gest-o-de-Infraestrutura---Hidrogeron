@@ -1095,28 +1095,42 @@ function calcularVencimentoChecagem(dataChecagem) {
   return formatarDataISO(venc);
 }
 
+// Leitura tolerante do item vindo da aba "Calibracoes_Controle": o cabeçalho
+// real da planilha usa nomes de coluna (Descricao, Marca_Modelo,
+// Criterio_Aceitacao, Vencimento_Calibracao, Operador_Responsavel etc.) que
+// não batiam com os nomes assumidos originalmente no front-end, fazendo a
+// tabela renderizar em branco mesmo com dados gravados. Cada campo aceita
+// múltiplas variações de nome (grafia antiga, nova e minúscula) para nunca
+// depender de uma única convenção da planilha.
 function normalizeCalibracao(c) {
   const dataChecagem = c.Data_Checagem || c.DataChecagem || c.data_checagem || "";
   return {
     id: c.ID || c.Id || c.id || uid(),
-    tag: c.TAG || c.Tag || c.tag || "",
-    equipamento: c.Instrumento || c.Equipamento || c.equipamento || c.Nome || c.nome || "",
-    modelo: c.Modelo || c.modelo || "",
+    tag: c.TAG || c.Tag || c.tag || c.Codigo || c.codigo || "",
+    equipamento: c.Descricao || c.descricao || c.Instrumento || c.Equipamento || c.equipamento || c.Nome || c.nome || "",
+    modelo: c.Marca_Modelo || c.MarcaModelo || c.marca_modelo || c.Modelo || c.modelo || "",
     capacidade: c.Capacidade || c.capacidade || "",
-    tolerancia: c.Tolerancia || c.Tolerância || c.tolerancia || c["Tolerância"] || "",
-    numeroSerie: c.Numero_Serie || c.NumeroSerie || c.numero_serie || c["Nº_Serie"] || c.NSerie || "",
-    area: c.Area || c.Setor || c.area || c.setor || "",
-    responsavel: c.Responsavel || c.Responsável || c.responsavel || "",
-    certificadoRbc: c.Certificado_RBC || c.CertificadoRBC || c.certificado_rbc || c.Numero_Certificado || c.numero_certificado || "",
+    tolerancia: c.Criterio_Aceitacao || c.criterio_aceitacao || c.criterio || c.Tolerancia || c.Tolerância || c.tolerancia || c["Tolerância"] || "",
+    numeroSerie: c.Numero_Serie || c.NumeroSerie || c.numero_serie || c.numeroSerie || c["Nº_Serie"] || c.NSerie || c.serie || "",
+    area: c.Setor || c.setor || c.Area || c.area || "",
+    responsavel: c.Operador_Responsavel || c.Operador_Responsave || c.Operador || c.operador || c.Responsavel || c.Responsável || c.responsavel || "",
+    certificadoRbc: c.Certificado_RBC || c.CertificadoRBC || c.certificado_rbc || c.Certificado || c.certificado || c.Numero_Certificado || c.numero_certificado || "",
     laboratorio: c.Laboratorio || c.laboratorio || c.Laboratório || c.laboratório || "",
     dataCalibracao: c.Data_Calibracao || c.DataCalibracao || c.data_calibracao || "",
-    dataValidade: c.Data_Validade || c.DataValidade || c.data_validade || c.Proxima_Calibracao || c.ProximaCalibracao || "",
+    dataValidade: c.Vencimento_Calibracao || c.VencimentoCalibracao || c.vencimento_calibracao || c.Validade || c.validade
+      || c.Data_Validade || c.DataValidade || c.data_validade || c.Proxima_Calibracao || c.ProximaCalibracao || "",
     dataChecagem,
-    vencimentoChecagem: c.Vencimento_Checagem || c.VencimentoChecagem || c.vencimento_checagem || calcularVencimentoChecagem(dataChecagem),
+    vencimentoChecagem: c.Vencimento_Checagem || c.VencimentoChecagem || c.vencimento_checagem || c.vencimentoChecagem || calcularVencimentoChecagem(dataChecagem),
     emCalibracao: parseBooleanoFlexivel(c.Em_Calibracao ?? c.EmCalibracao ?? c.em_calibracao ?? c.Situacao ?? c.situacao),
     dataEnvioLaboratorio: c.Data_Envio_Laboratorio || c.DataEnvioLaboratorio || c.data_envio_laboratorio || "",
     previsaoRetorno: c.Previsao_Retorno || c.PrevisaoRetorno || c.previsao_retorno || "",
-    urlCertificado: c.URL_Certificado || c.UrlCertificado || c.url_certificado || c.Link_Certificado || c.link_certificado || "",
+    urlCertificado: c.Link_Laudo_PDF || c.linkLaudo || c.URL_Certificado || c.UrlCertificado || c.url_certificado || c.Link_Certificado || c.link_certificado || "",
+    // Status textual já calculado na planilha (ex.: fórmula de "Prazo - Mais
+    // de 45 dias"), mantido só como referência bruta — o selo colorido
+    // exibido na tela continua vindo de `statusInstrumentoCalibracao`, que
+    // já cobre "Em Calibração" e os limiares de 45 dias de forma consistente
+    // com os cards de resumo e os filtros.
+    statusBruto: c.Status || c.status || "Prazo - Mais de 45 dias",
   };
 }
 
@@ -5908,9 +5922,22 @@ const CalibracaoModule = {
       return d ? d.toLocaleDateString("pt-BR") : "-";
     }
 
+    // Colunas compostas da tabela ("Instrumento / Modelo" e "Capacidade &
+    // Tolerância"): mesmas regras de fallback usadas para diagnosticar o
+    // desalinhamento de nomes de coluna da planilha, agora aplicadas direto
+    // na exibição para nunca deixar a célula em branco.
+    function nomeInstrumentoModelo(c) {
+      return [c.equipamento, c.modelo].filter(Boolean).join(" - ") || "-";
+    }
+    function capacidadeTolerancia(c) {
+      if (c.capacidade && c.tolerancia) return `${c.capacidade} | ${c.tolerancia}`;
+      return c.capacidade || c.tolerancia || "-";
+    }
+
     return {
       loading, erro, listaFiltrada, resumo, areas, filtroArea, filtroStatus, filtroBusca,
       formAberto, form, editandoId, salvando, abrirNovo, abrirEdicao, fecharForm, salvar, formatarData,
+      nomeInstrumentoModelo, capacidadeTolerancia,
       fichaAberta, instrumentoFicha, abrirFicha, fecharFicha,
       qrAberto, instrumentoQR, abrirQR, fecharQR,
       laudoAberto, instrumentoLaudo, abrirLaudo, fecharLaudo,
@@ -5998,23 +6025,20 @@ const CalibracaoModule = {
         <tbody>
           <tr v-for="c in listaFiltrada" :key="c.id" class="border-t border-slate-100 hover:bg-slate-50">
             <td class="px-3 py-2">
-              <button @click="abrirFicha(c)" class="btn-tap font-mono font-bold text-sky-700 hover:underline whitespace-nowrap">{{ c.tag || "—" }}</button>
+              <button @click="abrirFicha(c)" class="btn-tap font-mono font-bold text-sky-700 hover:underline whitespace-nowrap">{{ c.tag || "-" }}</button>
             </td>
             <td class="px-3 py-2 min-w-[140px]">
-              <button @click="abrirFicha(c)" class="btn-tap text-left block">
-                <p class="font-semibold text-slate-800">{{ c.equipamento }}</p>
-                <p v-if="c.modelo" class="text-slate-400">{{ c.modelo }}</p>
-              </button>
+              <button @click="abrirFicha(c)" class="btn-tap text-left block font-semibold text-slate-800">{{ nomeInstrumentoModelo(c) }}</button>
             </td>
-            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.capacidade || "—" }}<span v-if="c.tolerancia"> · {{ c.tolerancia }}</span></td>
-            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.numeroSerie || "—" }}</td>
-            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.certificadoRbc || "—" }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ capacidadeTolerancia(c) }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.numeroSerie || "-" }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.certificadoRbc || "-" }}</td>
             <td class="px-3 py-2 min-w-[120px]">
-              <p class="text-slate-700">{{ c.area || "—" }}</p>
-              <p class="text-slate-400">{{ c.responsavel || "—" }}</p>
+              <p class="text-slate-700">{{ c.area || "-" }}</p>
+              <p class="text-slate-400">{{ c.responsavel || "-" }}</p>
             </td>
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ formatarData(c.dataValidade) }}</td>
-            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.vencimentoChecagem ? formatarData(c.vencimentoChecagem) : "—" }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.vencimentoChecagem ? formatarData(c.vencimentoChecagem) : "-" }}</td>
             <td class="px-3 py-2">
               <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap" :class="c.status.cls">{{ c.status.cor }} {{ c.status.label }}</span>
             </td>
