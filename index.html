@@ -797,17 +797,56 @@ function normalizarTexto(s) {
 //   1) nome normalizado id\u00eantico (comportamento original, preservado);
 //   2) nome normalizado id\u00eantico ap\u00f3s remover um prefixo "[...] " do log;
 //   3) o texto do log cont\u00e9m o ID do ativo.
+// Remove qualquer trecho entre colchetes (prefixo OU sufixo de ID/tag) e
+// pontuação comum de separação, colapsando espaços — normalização "limpa"
+// usada como último recurso pelo casamento flexível abaixo.
+function limparTextoEquipamento(s) {
+  return String(s || "")
+    .replace(/\[[^\]]*\]/g, " ")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// `menor` aparece dentro de `maior` como um trecho de palavra inteira (início
+// e fim delimitados por espaço/borda da string) — evita que uma substring
+// solta gere falso positivo (ex.: "bomba 1" não deve bater com "bomba 10").
+function contemComoTrecho(maior, menor) {
+  if (!maior || !menor) return false;
+  const idx = maior.indexOf(menor);
+  if (idx === -1) return false;
+  const antes = idx === 0 || maior[idx - 1] === " ";
+  const depois = idx + menor.length === maior.length || maior[idx + menor.length] === " ";
+  return antes && depois;
+}
+
 function equipamentoLogCorrespondeAoAtivo(logEquipamento, ativo) {
   const bruto = normalizarTexto(logEquipamento);
   if (!bruto) return false;
-  const nomeAtivo = normalizarTexto(ativo && ativo.nome);
-  if (nomeAtivo) {
-    if (bruto === nomeAtivo) return true;
-    const semPrefixo = normalizarTexto(String(logEquipamento || "").replace(/^\s*\[[^\]]*\]\s*/, ""));
-    if (semPrefixo === nomeAtivo) return true;
-  }
+
+  // ID do ativo presente no texto do log é o sinal mais forte de casamento.
   const idAtivo = normalizarTexto(ativo && (ativo.idDisplay || ativo.id));
   if (idAtivo && bruto.includes(idAtivo)) return true;
+
+  const nomeAtivo = normalizarTexto(ativo && ativo.nome);
+  if (!nomeAtivo) return false;
+  if (bruto === nomeAtivo) return true;
+
+  // Normalização "limpa": cobre variações como "[EQ-TI-01] Servidor
+  // Central", "Servidor Central - TI" ou "Servidor  Central." preenchidas
+  // manualmente pela IRONTECH — remove colchetes (em qualquer posição) e
+  // pontuação de separação antes de comparar.
+  const logLimpo = limparTextoEquipamento(logEquipamento);
+  const nomeLimpo = limparTextoEquipamento(ativo.nome);
+  if (logLimpo && nomeLimpo && logLimpo === nomeLimpo) return true;
+
+  // Último recurso: um nome contém o outro como trecho de palavra inteira
+  // (nunca como substring solta) — exige um mínimo de caracteres para não
+  // confundir nomes curtos.
+  if (logLimpo.length >= 4 && nomeLimpo.length >= 4) {
+    if (contemComoTrecho(logLimpo, nomeLimpo) || contemComoTrecho(nomeLimpo, logLimpo)) return true;
+  }
   return false;
 }
 
