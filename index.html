@@ -1148,11 +1148,40 @@ function statusValidadeCalibracao(dataValidade) {
   return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-100 text-emerald-700", diffDias };
 }
 
-// Status "operacional" exibido na tabela/cards: um instrumento fora da
-// fábrica para calibração é 🟠 Em Calibração independentemente da data de
-// validade (ele só volta a ser avaliado por data quando retorna e o
-// cadastro é atualizado).
+// Classificação a partir do texto já calculado pela própria planilha (coluna
+// "Status" da aba Calibracoes_Controle, ex.: "Prazo - Mais de 45 dias",
+// "Encaminhado para Calibração", "Vencido"). Recalcular esse status a partir
+// da data no front-end divergia do valor real da planilha (itens aparecendo
+// como "Vencido" na tela mesmo com a planilha dizendo o contrário), então a
+// tela agora apenas espelha o texto da planilha em vez de reprocessá-lo.
+// Retorna null quando o texto não bate com nenhum padrão conhecido, para que
+// o chamador caia num fallback seguro.
+function classificarStatusPlanilha(statusTexto) {
+  const t = (statusTexto || "").toString().trim().toUpperCase();
+  if (!t) return null;
+  if (t.includes("VENCEU") || t.includes("VENCIDO")) {
+    return { label: "Vencido", cor: "🔴", cls: "bg-red-100 text-red-700" };
+  }
+  if (t.includes("ENCAMINHADO") || t.includes("CALIBRAÇÃO") || t.includes("CALIBRAR") || t.includes("LABORATÓRIO")) {
+    return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-100 text-orange-700" };
+  }
+  if (t.includes("MENOS DE 45") || t.includes("MENOS DE 30") || t.includes("MENOS DE 10") || t.includes("ATENÇÃO")) {
+    return { label: "Atenção", cor: "🟡", cls: "bg-amber-100 text-amber-700" };
+  }
+  if (t.includes("MAIS DE 45") || t.includes("CALIBRADO") || t.includes("NO PRAZO") || t.includes("EM DIA")) {
+    return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-100 text-emerald-700" };
+  }
+  return null;
+}
+
+// Status "operacional" exibido na tabela/cards: prioriza SEMPRE o texto da
+// coluna Status da planilha (statusBruto); só recorre ao sinalizador manual
+// "Em Calibração" do cadastro e, por fim, ao cálculo por data como rede de
+// segurança para registros sem nenhum Status reconhecível — nunca para
+// sobrepor um Status que a planilha já informou.
 function statusInstrumentoCalibracao(c) {
+  const daPlanilha = classificarStatusPlanilha(c && c.statusBruto);
+  if (daPlanilha) return daPlanilha;
   if (c && c.emCalibracao) return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-100 text-orange-700" };
   return statusValidadeCalibracao(c && c.dataValidade);
 }
@@ -4793,7 +4822,7 @@ const HomeHub = {
         const rawCalibracoes = data.calibracoes || data.Calibracoes_Controle || (data.data && data.data.calibracoes) || [];
         vencidosCalibracaoCount.value = (Array.isArray(rawCalibracoes) ? rawCalibracoes : [])
           .map(normalizeCalibracao)
-          .filter(c => statusValidadeCalibracao(c.dataValidade).label === "Vencido").length;
+          .filter(c => statusInstrumentoCalibracao(c).label === "Vencido").length;
         contatos.value = extractContatosWhatsApp(data);
       } catch (err) {
         console.error(err);
