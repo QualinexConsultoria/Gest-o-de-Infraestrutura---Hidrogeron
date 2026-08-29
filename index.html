@@ -559,6 +559,19 @@ function ehAreaTI(area) {
   return normalizarTexto(area) === normalizarTexto(AREA_TI);
 }
 
+// Data-limite para uma preventiva contar como "no prazo" dentro do mês de
+// referência (usada no cálculo de Aderência ao Cronograma). O setor de TI é
+// atendido pela IRONTECH (prestador externo) sob um SLA próprio, que não
+// segue o calendário interno de produção — por isso qualquer inspeção
+// válida dentro do próprio mês conta como no prazo. Os demais setores
+// mantêm a meta da 3ª quinta-feira do mês (+24h de tolerância).
+function dataLimiteAderencia(ano, mes, area) {
+  if (ehAreaTI(area)) {
+    return new Date(ano, mes, 0, 23, 59, 59, 999).getTime();
+  }
+  return getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
+}
+
 // Itens de inspeção do checklist RSG-6301-01, específicos por ativo de TI —
 // prevalecem sobre o texto livre de "Itens_Inspecao_Recomendados" da
 // planilha (quando cadastrado para estes ativos) para garantir que a
@@ -3971,7 +3984,10 @@ const DashboardModule = {
 
     // Aderência ao Cronograma Preventivo — mesmo motor de agendamento da
     // Preventiva/Indicadores (mesesProgramadosEquipamento + a meta da 3ª
-    // quinta-feira, getThirdThursday).
+    // quinta-feira, getThirdThursday, exceto TI — ver dataLimiteAderencia).
+    // O casamento do log com o ativo usa equipamentoLogCorrespondeAoAtivo
+    // (mesmo motor do grid de Preventivas) para não exigir igualdade estrita
+    // do texto de "Equipamento" lançado manualmente.
     function calcularAderencia(ativos, ano, mesesFiltro) {
       const mesesAlvo = (mesesFiltro && mesesFiltro.length) ? mesesFiltro : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
       let programadas = 0, noPrazo = 0;
@@ -3980,11 +3996,11 @@ const DashboardModule = {
           mesesProgramadosEquipamento(perfil).forEach(mes => {
             if (!mesesAlvo.includes(mes)) return;
             programadas++;
-            const planejada = getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
+            const planejada = dataLimiteAderencia(ano, mes, ativo.area);
             const executadaNoPrazo = preventivas.value.some(p => {
               const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
               if (anoLog !== ano || mesLog !== mes) return false;
-              if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
+              if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
               if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
               const d = parseData(p.data);
               return d && d.getTime() <= planejada;
@@ -4614,7 +4630,9 @@ const IndicadoresModule = {
     // Aderência ao Plano: para cada ciclo programado (ativo x perfil x mês,
     // usando o mesmo motor de agendamento do Calendário Mestre), verifica se
     // existe um log de preventiva daquele ativo no mês, executado até a data
-    // planejada (3ª quinta-feira — ver getThirdThursday).
+    // planejada (3ª quinta-feira, exceto TI — ver dataLimiteAderencia). O
+    // casamento do log com o ativo usa equipamentoLogCorrespondeAoAtivo
+    // (mesmo motor do grid de Preventivas), sem exigir igualdade estrita.
     function calcularAderencia(ativos, ano, mesesFiltro) {
       const mesesAlvo = (mesesFiltro && mesesFiltro.length) ? mesesFiltro : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
       let programadas = 0, noPrazo = 0;
@@ -4623,11 +4641,11 @@ const IndicadoresModule = {
           mesesProgramadosEquipamento(perfil).forEach(mes => {
             if (!mesesAlvo.includes(mes)) return;
             programadas++;
-            const planejada = getThirdThursday(ano, mes - 1).getTime() + 24 * 3600 * 1000;
+            const planejada = dataLimiteAderencia(ano, mes, ativo.area);
             const executadaNoPrazo = preventivas.value.some(p => {
               const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
               if (anoLog !== ano || mesLog !== mes) return false;
-              if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
+              if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
               if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
               const d = parseData(p.data);
               return d && d.getTime() <= planejada;
