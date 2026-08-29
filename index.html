@@ -788,6 +788,29 @@ function normalizarTexto(s) {
   return String(s || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+// Casamento flex\u00edvel entre o texto de "Equipamento" registrado num log
+// (preventiva/corretiva) e um ativo cadastrado. Cobre varia\u00e7\u00f5es comuns de
+// preenchimento manual que uma igualdade estrita de nome n\u00e3o pega \u2014 em
+// especial o prefixo de ID entre colchetes (ex.: "[EQ-TI-01] Servidor
+// Central" batendo com o ativo "Servidor Central") e o log trazendo
+// diretamente o ID do equipamento em vez do nome:
+//   1) nome normalizado id\u00eantico (comportamento original, preservado);
+//   2) nome normalizado id\u00eantico ap\u00f3s remover um prefixo "[...] " do log;
+//   3) o texto do log cont\u00e9m o ID do ativo.
+function equipamentoLogCorrespondeAoAtivo(logEquipamento, ativo) {
+  const bruto = normalizarTexto(logEquipamento);
+  if (!bruto) return false;
+  const nomeAtivo = normalizarTexto(ativo && ativo.nome);
+  if (nomeAtivo) {
+    if (bruto === nomeAtivo) return true;
+    const semPrefixo = normalizarTexto(String(logEquipamento || "").replace(/^\s*\[[^\]]*\]\s*/, ""));
+    if (semPrefixo === nomeAtivo) return true;
+  }
+  const idAtivo = normalizarTexto(ativo && (ativo.idDisplay || ativo.id));
+  if (idAtivo && bruto.includes(idAtivo)) return true;
+  return false;
+}
+
 // Gest\u00e3o Administrativa: s\u00f3 usu\u00e1rios com Perfil "Administrador" (tabela
 // Usuarios) veem os bot\u00f5es de Editar/Excluir em Preventivas e Corretivas.
 function isAdmin(user) {
@@ -1261,14 +1284,16 @@ const PreventivaModule = {
     });
     watch(areaSelecionada, () => { filtroPeriodicidadeLista.value = "todas"; });
 
-    // O log de preventivas não traz o ID do equipamento, então o casamento
-    // é feito por nome do equipamento + área do próprio equipamento.
+    // O log de preventivas não traz sempre o ID do equipamento de forma
+    // isolada, então o casamento é feito de forma flexível (ver
+    // equipamentoLogCorrespondeAoAtivo): nome exato, nome sem um eventual
+    // prefixo "[ID] " no log, ou o log trazendo o ID do ativo — cobre o caso
+    // de ativos como os de TI, cujos logs podem chegar como
+    // "[EQ-TI-01] Servidor Central" em vez do nome puro cadastrado.
     function ultimaInspecao(eq) {
       let melhor = null;
-      const nomeAlvo = normalizarTexto(eq.nome);
       preventivasHistorico.value.forEach(p => {
-        const nomeLog = normalizarTexto(p.equipamento);
-        if (!nomeLog || nomeLog !== nomeAlvo) return;
+        if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, eq)) return;
         if (p.area && eq.area && normalizarTexto(p.area) !== normalizarTexto(eq.area)) return;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return;
@@ -1281,11 +1306,10 @@ const PreventivaModule = {
 
     // Existe log de preventiva deste equipamento dentro do mês/ano informado?
     // Base do cálculo de status das células do Calendário Mestre.
-    function logNoMes(nome, area, ano, mes) {
-      const nomeAlvo = normalizarTexto(nome);
-      const areaAlvo = normalizarTexto(area);
+    function logNoMes(ativo, ano, mes) {
+      const areaAlvo = normalizarTexto(ativo && ativo.area);
       return preventivasHistorico.value.some(p => {
-        if (normalizarTexto(p.equipamento) !== nomeAlvo) return false;
+        if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
         if (p.area && areaAlvo && normalizarTexto(p.area) !== areaAlvo) return false;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return false;
@@ -1425,7 +1449,7 @@ const PreventivaModule = {
       perfis.forEach(perfil => {
         mesesProgramadosEquipamento(perfil).forEach(mes => {
           if (mes > mesAtual) return;
-          if (logNoMes(ativo.nome, ativo.area, anoAtual, mes)) return;
+          if (logNoMes(ativo, anoAtual, mes)) return;
           if (dataPlanejadaMes(anoAtual, mes).getTime() < Date.now()) atrasado = true;
         });
       });
@@ -1520,7 +1544,7 @@ const PreventivaModule = {
     // (a 3ª quinta-feira do mês já passou sem log) ou 'programado' (a data
     // planejada ainda não chegou — inclui o mês vigente antes da 3ª quinta).
     function statusCelula(ativo, mes, ano) {
-      if (logNoMes(ativo.nome, ativo.area, ano, mes)) return "concluido";
+      if (logNoMes(ativo, ano, mes)) return "concluido";
       return dataPlanejadaMes(ano, mes).getTime() < Date.now() ? "atrasado" : "programado";
     }
 
