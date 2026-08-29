@@ -863,6 +863,24 @@ function equipamentoLogCorrespondeAoAtivo(logEquipamento, ativo) {
   return false;
 }
 
+// Casamento flexível entre dois valores de "Área/Setor" — mesmo espírito de
+// equipamentoLogCorrespondeAoAtivo: cobre a área do log/planilha vindo com
+// texto adicional (ex.: "Setor Coating", "Coating - Produção") sem abrir
+// mão de distinguir setores realmente diferentes. Essa distinção é crítica
+// para desambiguar equipamentos com nomes duplicados entre áreas (ex.:
+// "Balança" existe em Coating e em Uso Geral; "Motoesmeril" em Coating,
+// Metalmecânica e Oficina) — sem ela, o casamento por nome de
+// equipamentoLogCorrespondeAoAtivo poderia atribuir o log de um setor a um
+// ativo de outro. Ausência de valor em qualquer um dos lados não bloqueia
+// (mesmo comportamento já existente quando a área não foi informada).
+function areasCorrespondem(areaA, areaB) {
+  const limpoA = limparTextoEquipamento(areaA);
+  const limpoB = limparTextoEquipamento(areaB);
+  if (!limpoA || !limpoB) return true;
+  if (limpoA === limpoB) return true;
+  return contemComoTrecho(limpoA, limpoB) || contemComoTrecho(limpoB, limpoA);
+}
+
 // Gest\u00e3o Administrativa: s\u00f3 usu\u00e1rios com Perfil "Administrador" (tabela
 // Usuarios) veem os bot\u00f5es de Editar/Excluir em Preventivas e Corretivas.
 function isAdmin(user) {
@@ -1346,7 +1364,7 @@ const PreventivaModule = {
       let melhor = null;
       preventivasHistorico.value.forEach(p => {
         if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, eq)) return;
-        if (p.area && eq.area && normalizarTexto(p.area) !== normalizarTexto(eq.area)) return;
+        if (!areasCorrespondem(p.area, eq.area)) return;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return;
         if (!melhor || d > melhor.dataObj) {
@@ -1359,10 +1377,9 @@ const PreventivaModule = {
     // Existe log de preventiva deste equipamento dentro do mês/ano informado?
     // Base do cálculo de status das células do Calendário Mestre.
     function logNoMes(ativo, ano, mes) {
-      const areaAlvo = normalizarTexto(ativo && ativo.area);
       return preventivasHistorico.value.some(p => {
         if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
-        if (p.area && areaAlvo && normalizarTexto(p.area) !== areaAlvo) return false;
+        if (!areasCorrespondem(p.area, ativo && ativo.area)) return false;
         const d = new Date(p.data);
         if (isNaN(d.getTime())) return false;
         return d.getFullYear() === ano && d.getMonth() + 1 === mes;
@@ -4001,7 +4018,7 @@ const DashboardModule = {
               const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
               if (anoLog !== ano || mesLog !== mes) return false;
               if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
-              if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+              if (!areasCorrespondem(p.area, ativo.area)) return false;
               const d = parseData(p.data);
               return d && d.getTime() <= planejada;
             });
@@ -4014,8 +4031,7 @@ const DashboardModule = {
 
     function corretivasDoAtivo(ativo) {
       return corretivasFiltradas.value.filter(c =>
-        normalizarTexto(c.equipamento) === normalizarTexto(ativo.nome) &&
-        (!c.area || !ativo.area || normalizarTexto(c.area) === normalizarTexto(ativo.area))
+        equipamentoLogCorrespondeAoAtivo(c.equipamento, ativo) && areasCorrespondem(c.area, ativo.area)
       );
     }
     // Classificação de disponibilidade por ativo (3 níveis — mesma leitura da
@@ -4109,7 +4125,7 @@ const DashboardModule = {
     // comparar setores entre si para destacar os mais críticos.
     const dadosConformidadePorSetor = computed(() => {
       const linhas = areas.value.map(area => {
-        const lista = preventivas.value.filter(p => noPeriodo(p.data) && normalizarTexto(p.area) === normalizarTexto(area));
+        const lista = preventivas.value.filter(p => noPeriodo(p.data) && areasCorrespondem(p.area, area));
         const pct = lista.length === 0 ? 100 : Math.round((lista.filter(p => p.status === "C").length / lista.length) * 100);
         return { area, pct };
       }).sort((a, b) => a.pct - b.pct);
@@ -4162,8 +4178,8 @@ const DashboardModule = {
           const jaTemLog = preventivas.value.some(p => {
             const { ano, mes } = extrairAnoMes(p.data);
             if (ano !== anoAtual || mes !== mesAtual) return false;
-            if (normalizarTexto(p.equipamento) !== normalizarTexto(ativo.nome)) return false;
-            if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+            if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
+            if (!areasCorrespondem(p.area, ativo.area)) return false;
             return true;
           });
           if (jaTemLog) return;
@@ -4646,7 +4662,7 @@ const IndicadoresModule = {
               const { ano: anoLog, mes: mesLog } = extrairAnoMes(p.data);
               if (anoLog !== ano || mesLog !== mes) return false;
               if (!equipamentoLogCorrespondeAoAtivo(p.equipamento, ativo)) return false;
-              if (p.area && ativo.area && normalizarTexto(p.area) !== normalizarTexto(ativo.area)) return false;
+              if (!areasCorrespondem(p.area, ativo.area)) return false;
               const d = parseData(p.data);
               return d && d.getTime() <= planejada;
             });
@@ -4758,8 +4774,7 @@ const IndicadoresModule = {
         const aderencia = programadas === 0 ? 100 : Math.round((noPrazo / programadas) * 100);
 
         const corretivasAtivo = corretivasFiltradas.value.filter(c =>
-          normalizarTexto(c.equipamento) === normalizarTexto(ativo.nome) &&
-          (!c.area || !ativo.area || normalizarTexto(c.area) === normalizarTexto(ativo.area))
+          equipamentoLogCorrespondeAoAtivo(c.equipamento, ativo) && areasCorrespondem(c.area, ativo.area)
         );
         const mttrAtivo = mttrDeLista(corretivasAtivo);
 
