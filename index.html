@@ -254,6 +254,21 @@ async function updateRecordApi(tipo, id, campos) {
   return handleApiResponse(res);
 }
 
+// ===== Módulos de Gestão (Calibração, Ativos, Usuários) — mesmo padrão GET
+// dos demais saves: sem preflight de CORS e com resposta legível. =====
+async function saveCalibracaoApi(payload) {
+  return apiGet({ action: "saveCalibracao", ...payload });
+}
+async function saveEquipamentoApi(payload) {
+  return apiGet({ action: "saveEquipamento", ...payload });
+}
+async function updateUserPinApi(payload) {
+  return apiGet({ action: "updateUserPin", ...payload });
+}
+async function saveUsuarioApi(payload) {
+  return apiGet({ action: "saveUsuario", ...payload });
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -998,6 +1013,128 @@ function corPeriodicidadeItem(p) {
 }
 
 /* ==========================================================================
+   WHATSAPP — canal de contato rápido e alertas automáticos de NC/Corretiva
+   ========================================================================== */
+// Mantém apenas dígitos e garante o código do país (55) na frente — aceita
+// números cadastrados com ou sem formatação/código do país.
+function normalizarTelefoneWhatsApp(numero) {
+  const digitos = String(numero || "").replace(/\D+/g, "");
+  if (!digitos) return "";
+  return digitos.startsWith("55") ? digitos : "55" + digitos;
+}
+function gerarLinkWhatsApp(numero, mensagem) {
+  const digitos = normalizarTelefoneWhatsApp(numero);
+  const texto = encodeURIComponent(mensagem || "");
+  return digitos ? `https://wa.me/${digitos}?text=${texto}` : `https://wa.me/?text=${texto}`;
+}
+function abrirWhatsApp(numero, mensagem) {
+  window.open(gerarLinkWhatsApp(numero, mensagem), "_blank", "noopener");
+}
+// Contatos de Config_Contatos: usados apenas se a planilha ainda não tiver a
+// aba/colunas — a tela nunca fica sem os botões de contato por causa disso.
+const CONTATOS_WHATSAPP_FALLBACK = [
+  { cargo: "Coordenador de Produção", numero: "" },
+  { cargo: "Qualidade", numero: "" },
+  { cargo: "Compras", numero: "" },
+  { cargo: "Diretoria", numero: "" },
+];
+function extractContatosWhatsApp(data) {
+  const raw = (data && (data.configContatos || data.Config_Contatos || (data.data && data.data.configContatos))) || [];
+  const lista = (Array.isArray(raw) ? raw : []).map(c => ({
+    cargo: c.Cargo || c.cargo || c.Contato || c.contato || c.Nome || c.nome || "Contato",
+    numero: c.Numero || c.numero || c.Telefone || c.telefone || c.WhatsApp || c.whatsapp || "",
+  })).filter(c => c.numero);
+  return lista.length ? lista : CONTATOS_WHATSAPP_FALLBACK;
+}
+
+// Mensagem estruturada enviada ao abrir um chamado Corretivo ou apontar uma
+// Não Conformidade no checklist Preventivo. O app não tem rota própria por
+// registro (SPA sem URLs profundas), então em vez de um link quebrado o
+// texto referencia o protocolo/laudo pelo código para consulta no sistema.
+function montarMensagemAlertaWhatsApp({ tipo, id, equipamento, area, descricao, inspetor }) {
+  const codigoLaudo = tipo === "corretiva" ? "RSG-6302" : "RSG-6301";
+  const linhas = [
+    `🚨 *Alerta ${tipo === "corretiva" ? "de Manutenção Corretiva" : "de Não Conformidade"}* — Hidrogeron`,
+    `Protocolo: #${id}`,
+    `Equipamento: ${equipamento || "-"}`,
+    `Setor: ${area || "-"}`,
+    `${tipo === "corretiva" ? "Descrição do Problema" : "Descrição do Desvio"}: ${descricao || "-"}`,
+    `${tipo === "corretiva" ? "Solicitante" : "Inspetor"}: ${inspetor || "-"}`,
+    `Consulte o laudo completo (${codigoLaudo}) no sistema Hidrogeron.`,
+  ];
+  return linhas.join("\n");
+}
+
+// ===== Calibração & Medição =====
+function normalizeCalibracao(c) {
+  return {
+    id: c.ID || c.Id || c.id || uid(),
+    equipamento: c.Equipamento || c.equipamento || c.Nome || c.nome || "",
+    area: c.Area || c.area || "",
+    certificadoRbc: c.Certificado_RBC || c.CertificadoRBC || c.certificado_rbc || c.Numero_Certificado || c.numero_certificado || "",
+    laboratorio: c.Laboratorio || c.laboratorio || c.Laboratório || c.laboratório || "",
+    dataCalibracao: c.Data_Calibracao || c.DataCalibracao || c.data_calibracao || "",
+    dataValidade: c.Data_Validade || c.DataValidade || c.data_validade || c.Proxima_Calibracao || c.ProximaCalibracao || "",
+  };
+}
+// 🟢 Em dia (> 30 dias para vencer) / 🟡 Vence em 30 dias / 🔴 Vencido — ou
+// "Sem data" quando a validade não foi informada, para nunca quebrar a tela.
+function statusValidadeCalibracao(dataValidade) {
+  const d = parseDataHoraLocal(dataValidade);
+  if (!d) return { label: "Sem data", cor: "⚪", cls: "bg-slate-100 text-slate-600" };
+  const hoje = new Date();
+  const diffDias = Math.floor((d.getTime() - new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()).getTime()) / 86400000);
+  if (diffDias < 0) return { label: "Vencido", cor: "🔴", cls: "bg-red-100 text-red-700", diffDias };
+  if (diffDias <= 30) return { label: "Vence em 30 dias", cor: "🟡", cls: "bg-amber-100 text-amber-700", diffDias };
+  return { label: "Em dia", cor: "🟢", cls: "bg-emerald-100 text-emerald-700", diffDias };
+}
+
+// Modal de confirmação reaproveitado tanto pela Preventiva (item apontado
+// como Não Conforme) quanto pela Corretiva (abertura de chamado) para
+// disparar o alerta estruturado via WhatsApp — mesma mensagem/layout,
+// só muda o "tipo" e os dados do registro.
+const AlertaWhatsAppModal = {
+  props: { dados: Object, contatos: { type: Array, default: () => [] } },
+  emits: ["fechar"],
+  setup(props, { emit }) {
+    const contatoEscolhido = ref("");
+    const mensagem = computed(() => montarMensagemAlertaWhatsApp(props.dados || {}));
+    function enviar() {
+      const contato = props.contatos.find(c => c.cargo === contatoEscolhido.value);
+      abrirWhatsApp(contato ? contato.numero : "", mensagem.value);
+      emit("fechar");
+    }
+    return { contatoEscolhido, mensagem, enviar };
+  },
+  template: `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+    <div class="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-slate-800 flex items-center gap-1.5">📲 Enviar Alerta via WhatsApp</h3>
+        <button @click="$emit('fechar')" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+      </div>
+      <p class="text-xs text-slate-500">Confira a mensagem antes de enviar. Ela será aberta no WhatsApp para você escolher o contato (ou selecione um abaixo).</p>
+      <textarea readonly rows="7" class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-700">{{ mensagem }}</textarea>
+      <div v-if="contatos.length">
+        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Enviar diretamente para (opcional)</label>
+        <select v-model="contatoEscolhido" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="">Escolher no WhatsApp</option>
+          <option v-for="c in contatos" :key="c.cargo" :value="c.cargo">{{ c.cargo }}</option>
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button @click="$emit('fechar')" class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
+          Agora não
+        </button>
+        <button @click="enviar" class="btn-tap flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-sm flex items-center justify-center gap-1.5">
+          📲 Enviar Alerta
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
    FICHA DE INSPEÇÃO TÉCNICA / LAUDO OPERACIONAL (RSG-6301-01)
    ========================================================================== */
 const RSG_CODIGO = "RSG-6301-01";
@@ -1231,7 +1368,7 @@ const LaudoPreventivaModal = {
 const PreventivaModule = {
   props: { user: Object },
   emits: ["go-home"],
-  components: { LaudoPreventivaModal, AssinaturaCanvas },
+  components: { LaudoPreventivaModal, AssinaturaCanvas, AlertaWhatsAppModal },
   setup(props, { emit }) {
     const meses = MESES_PT;
 
@@ -1272,6 +1409,13 @@ const PreventivaModule = {
     const laudoAberto = ref(false);
     const laudoAtual = ref(null);
     const laudoModoPosSalvar = ref(false);
+
+    // Alerta automático via WhatsApp ao registrar um item Não Conforme.
+    const alertaWhatsAppAberto = ref(false);
+    const alertaWhatsAppDados = ref(null);
+    function fecharAlertaWhatsApp() {
+      alertaWhatsAppAberto.value = false;
+    }
 
     // Filtros do Histórico de Inspeções
     const filtroAno = ref("todos");
@@ -1957,6 +2101,18 @@ const PreventivaModule = {
         laudoModoPosSalvar.value = true;
         laudoAberto.value = true;
 
+        if (temNC.value) {
+          alertaWhatsAppDados.value = {
+            tipo: "nc",
+            id: idLog,
+            equipamento: equipamentoNome,
+            area: areaAtual,
+            descricao: partesObs.join(" | ") || "Item(ns) não conforme(s) apontado(s) no checklist.",
+            inspetor: usuarioNome,
+          };
+          alertaWhatsAppAberto.value = true;
+        }
+
         // NÃO recarrega a API imediatamente — a planilha pode levar um instante
         // para consolidar a escrita. Sincroniza em segundo plano só depois de 3s.
         setTimeout(() => carregarDados({ silencioso: true }), 3000);
@@ -2163,6 +2319,7 @@ const PreventivaModule = {
       pedirExclusaoLog, cancelarExclusaoLog, confirmarExclusaoLog, abrirEdicaoLog, fecharEdicaoLog, salvarEdicaoLog,
       periodicidadeDoEquipamento, exportarExcel, exportarPDF,
       laudoAberto, laudoAtual, laudoModoPosSalvar, fecharLaudo, laudoNovaInspecao, laudoIrInicio, abrirLaudoHistorico,
+      alertaWhatsAppAberto, alertaWhatsAppDados, fecharAlertaWhatsApp,
       calendarioArea, calendarioAno, calendarioAnoAnterior, calendarioAnoProximo, ativosCalendario, statusCelula, CORES_CELULA, perfisNaCelula,
       dataLimiteMesAtual, dataPlanejadaMes, formatarDataCurta,
       exportarCalendarioExcel, exportarCalendarioPDF,
@@ -2591,6 +2748,8 @@ const PreventivaModule = {
       @fechar="fecharLaudo" @nova-inspecao="laudoNovaInspecao" @ir-inicio="laudoIrInicio">
     </laudo-preventiva-modal>
 
+    <alerta-whats-app-modal v-if="alertaWhatsAppAberto" :dados="alertaWhatsAppDados" @fechar="fecharAlertaWhatsApp"></alerta-whats-app-modal>
+
     <!-- MODAL: confirmação de exclusão (Gestão Administrativa) -->
     <div v-if="excluirAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusaoLog">
       <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
@@ -2848,7 +3007,7 @@ const LaudoCorretivaModal = {
    ========================================================================== */
 const CorretivaModule = {
   props: { user: Object },
-  components: { AssinaturaCanvas, LaudoCorretivaModal },
+  components: { AssinaturaCanvas, LaudoCorretivaModal, AlertaWhatsAppModal },
   setup(props) {
     const prioridades = PRIORIDADES;
     const form = reactive({
@@ -2858,6 +3017,11 @@ const CorretivaModule = {
       descricao: "",
     });
     const enviando = ref(false);
+    const alertaWhatsAppAberto = ref(false);
+    const alertaWhatsAppDados = ref(null);
+    function fecharAlertaWhatsApp() {
+      alertaWhatsAppAberto.value = false;
+    }
     const chamados = ref([]);
     const chamadosEncerrados = ref([]);
     const loadingChamados = ref(true);
@@ -3088,6 +3252,16 @@ const CorretivaModule = {
 
         anexosAbertura.value = [];
         pushToast("Chamado aberto com sucesso!", "success");
+
+        alertaWhatsAppDados.value = {
+          tipo: "corretiva",
+          id: idChamado,
+          equipamento: payload.equipamento,
+          area: payload.area,
+          descricao: payload.descricaoProblema,
+          inspetor: payload.solicitante,
+        };
+        alertaWhatsAppAberto.value = true;
       } catch (err) {
         console.error(err);
         pushToast("Erro ao abrir chamado. Tente novamente.", "error");
@@ -3426,6 +3600,7 @@ const CorretivaModule = {
 
     return {
       areas, prioridades, form, enviando, abrirChamado,
+      alertaWhatsAppAberto, alertaWhatsAppDados, fecharAlertaWhatsApp,
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
       chamadosFiltrados, chamadosEncerradosFiltrados,
       filtroBuscaCorretiva, filtroAreaCorretiva, filtroStatusCorretiva, filtroPrioridadeCorretiva, limparFiltrosCorretiva,
@@ -3841,6 +4016,8 @@ const CorretivaModule = {
     <laudo-corretiva-modal v-if="laudoCorretivaAberto" :laudo="laudoCorretivaAtual" :modo-pos-salvar="laudoCorretivaModoPosSalvar"
       @fechar="fecharLaudoCorretiva">
     </laudo-corretiva-modal>
+
+    <alerta-whats-app-modal v-if="alertaWhatsAppAberto" :dados="alertaWhatsAppDados" @fechar="fecharAlertaWhatsApp"></alerta-whats-app-modal>
 
     <!-- MODAL: confirmação de exclusão (Gestão Administrativa) -->
     <div v-if="excluirChamadoAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusaoChamado">
@@ -4456,43 +4633,51 @@ const DashboardModule = {
    ========================================================================== */
 const HomeHub = {
   props: { user: Object },
-  emits: ["navigate"],
+  emits: ["navigate", "abrir-perfil"],
   setup(props) {
     const abertosCount = ref(null); // null enquanto carrega
+    const vencidosCalibracaoCount = ref(null);
+    const contatos = ref(CONTATOS_WHATSAPP_FALLBACK);
 
-    async function carregarContagemAbertos() {
+    async function carregarResumo() {
       try {
         const data = await getInitialData();
         abertosCount.value = extractCorretivas(data).filter(c => isStatusChamadoAberto(c.status)).length;
+        const rawCalibracoes = data.calibracoes || data.Calibracoes_Controle || (data.data && data.data.calibracoes) || [];
+        vencidosCalibracaoCount.value = (Array.isArray(rawCalibracoes) ? rawCalibracoes : [])
+          .map(normalizeCalibracao)
+          .filter(c => statusValidadeCalibracao(c.dataValidade).label === "Vencido").length;
+        contatos.value = extractContatosWhatsApp(data);
       } catch (err) {
         console.error(err);
         abertosCount.value = null;
+        vencidosCalibracaoCount.value = null;
       }
     }
 
-    onMounted(carregarContagemAbertos);
+    onMounted(carregarResumo);
 
-    const cards = [
+    const cardsOperacao = [
       {
         key: "preventiva",
         title: "Manutenção Preventiva",
-        desc: "Execução de checklists periódicos por setor",
-        icon: "✅",
+        desc: "Checklists periódicos e matriz anual",
+        icon: "🟢",
         accent: "bg-sky-500",
       },
       {
         key: "corretiva",
         title: "Manutenção Corretiva",
-        desc: "Abertura e acompanhamento de ordens de serviço",
-        icon: "🛠️",
+        desc: "Abertura/fechamento de chamados com alerta WhatsApp",
+        icon: "🟠",
         accent: "bg-orange-500",
       },
       {
-        key: "indicadores",
-        title: "Indicadores (KPIs)",
-        desc: "Métricas de conformidade, MTBF/MTTR e histórico de intervenções",
-        icon: "📈",
-        accent: "bg-violet-500",
+        key: "calibracao",
+        title: "Calibração & Medição",
+        desc: "Instrumentos, certificados RBC e validade das calibrações",
+        icon: "📐",
+        accent: "bg-teal-500",
       },
       {
         key: "dashboard",
@@ -4501,9 +4686,56 @@ const HomeHub = {
         icon: "📊",
         accent: "bg-emerald-500",
       },
+      {
+        key: "indicadores",
+        title: "Indicadores (KPIs)",
+        desc: "Métricas de conformidade, MTBF/MTTR e histórico de intervenções",
+        icon: "📈",
+        accent: "bg-violet-500",
+      },
     ];
 
-    return { cards, abertosCount, primeiroNome: (props.user.nome || "").split(" ")[0] };
+    const cardsGestao = computed(() => {
+      const lista = [
+        {
+          key: "ativos",
+          title: "Gestão de Ativos",
+          desc: "Cadastro de máquinas, checklist e status ativo/inativo",
+          icon: "🏭",
+          accent: "bg-slate-700",
+        },
+      ];
+      if (isAdmin(props.user)) {
+        lista.push({
+          key: "usuarios",
+          title: "Gestão de Usuários",
+          desc: "Apenas Administrador — operadores, PINs e permissões",
+          icon: "👥",
+          accent: "bg-indigo-600",
+        });
+      }
+      lista.push({
+        key: "perfil",
+        title: "Meu Perfil / Troca de PIN",
+        desc: "Visualize seus dados e altere seu próprio PIN",
+        icon: "👤",
+        accent: "bg-sky-700",
+      });
+      return lista;
+    });
+
+    const cardsFuturos = [
+      { title: "Gestão de Documentos (GED & ITs)", icon: "📄" },
+      { title: "Não Conformidades & RNCs (CAPA)", icon: "🚨" },
+      { title: "Matriz de Riscos & Oportunidades", icon: "🛡️" },
+      { title: "Planejamento Estratégico & Metas", icon: "🎯" },
+    ];
+
+    return {
+      cardsOperacao, cardsGestao, cardsFuturos, abertosCount, vencidosCalibracaoCount, contatos,
+      primeiroNome: (props.user.nome || "").split(" ")[0],
+      abrirWhatsApp,
+    };
   },
   template: `
   <div>
@@ -4512,29 +4744,84 @@ const HomeHub = {
       <p class="text-slate-500 text-sm mt-1">Selecione um módulo para começar.</p>
     </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <button v-for="c in cards" :key="c.key" @click="$emit('navigate', c.key)"
-        class="group relative text-left bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg hover:-translate-y-0.5 hover:border-slate-300 transition-all duration-200 btn-tap">
-        <div class="flex items-start justify-between mb-4">
-          <div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl text-white shadow-sm" :class="c.accent">
+    <!-- A) Operação Industrial & Manutenção -->
+    <section class="mb-8">
+      <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Operação Industrial & Manutenção</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <button v-for="c in cardsOperacao" :key="c.key" @click="$emit('navigate', c.key)"
+          class="group relative text-left bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg hover:-translate-y-0.5 hover:border-slate-300 transition-all duration-200 btn-tap">
+          <div class="flex items-start justify-between mb-4">
+            <div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl text-white shadow-sm" :class="c.accent">
+              {{ c.icon }}
+            </div>
+            <span v-if="c.key === 'corretiva' && abertosCount"
+              class="text-xs font-bold bg-red-100 text-red-700 px-2.5 py-1 rounded-full">
+              {{ abertosCount }} em aberto
+            </span>
+            <span v-else-if="c.key === 'corretiva' && abertosCount === 0"
+              class="text-xs font-bold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full">
+              Tudo em dia
+            </span>
+            <span v-else-if="c.key === 'calibracao' && vencidosCalibracaoCount"
+              class="text-xs font-bold bg-red-100 text-red-700 px-2.5 py-1 rounded-full">
+              {{ vencidosCalibracaoCount }} vencido(s)
+            </span>
+          </div>
+          <h3 class="font-bold text-slate-800 text-base mb-1">{{ c.title }}</h3>
+          <p class="text-sm text-slate-500 leading-snug mb-4">{{ c.desc }}</p>
+          <span class="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:gap-2 transition-all">
+            Abrir <span aria-hidden="true">→</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <!-- B) Gestão & Cadastros -->
+    <section class="mb-8">
+      <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Gestão & Cadastros</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <button v-for="c in cardsGestao" :key="c.key"
+          @click="c.key === 'perfil' ? $emit('abrir-perfil') : $emit('navigate', c.key)"
+          class="group text-left bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-lg hover:-translate-y-0.5 hover:border-slate-300 transition-all duration-200 btn-tap">
+          <div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl text-white shadow-sm mb-4" :class="c.accent">
             {{ c.icon }}
           </div>
-          <span v-if="c.key === 'corretiva' && abertosCount"
-            class="text-xs font-bold bg-red-100 text-red-700 px-2.5 py-1 rounded-full">
-            {{ abertosCount }} em aberto
+          <h3 class="font-bold text-slate-800 text-base mb-1">{{ c.title }}</h3>
+          <p class="text-sm text-slate-500 leading-snug mb-4">{{ c.desc }}</p>
+          <span class="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:gap-2 transition-all">
+            Abrir <span aria-hidden="true">→</span>
           </span>
-          <span v-else-if="c.key === 'corretiva' && abertosCount === 0"
-            class="text-xs font-bold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full">
-            Tudo em dia
+        </button>
+      </div>
+    </section>
+
+    <!-- C) Módulos de SGQ — Expansão Futura -->
+    <section class="mb-8">
+      <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Módulos de SGQ — Expansão Futura</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div v-for="c in cardsFuturos" :key="c.title"
+          class="relative text-left bg-slate-50 rounded-2xl border border-dashed border-slate-300 p-4 opacity-75">
+          <span class="absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+            Em Breve
           </span>
+          <div class="w-9 h-9 rounded-lg flex items-center justify-center text-lg bg-slate-200 text-slate-500 mb-3">{{ c.icon }}</div>
+          <p class="text-xs font-bold text-slate-500 leading-snug">{{ c.title }}</p>
         </div>
-        <h3 class="font-bold text-slate-800 text-base mb-1">{{ c.title }}</h3>
-        <p class="text-sm text-slate-500 leading-snug mb-4">{{ c.desc }}</p>
-        <span class="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:gap-2 transition-all">
-          Abrir <span aria-hidden="true">→</span>
-        </span>
-      </button>
-    </div>
+      </div>
+    </section>
+
+    <!-- D) Canal de Gestão & Contato Rápido (WhatsApp) -->
+    <section>
+      <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Canal de Gestão & Contato Rápido</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+        <div class="flex flex-wrap gap-2">
+          <button v-for="c in contatos" :key="c.cargo" @click="abrirWhatsApp(c.numero, 'Olá, ' + c.cargo + '! ')"
+            class="btn-tap flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold px-3.5 py-2 rounded-full text-sm border border-emerald-200">
+            💬 {{ c.cargo }}
+          </button>
+        </div>
+      </div>
+    </section>
   </div>`
 };
 
@@ -5039,13 +5326,721 @@ const IndicadoresModule = {
 };
 
 /* ==========================================================================
+   MÓDULO CALIBRAÇÃO & MEDIÇÃO (aba Calibracoes_Controle)
+   ========================================================================== */
+const CalibracaoModule = {
+  emits: ["go-home"],
+  setup() {
+    const loading = ref(true);
+    const erro = ref("");
+    const lista = ref([]);
+    const salvando = ref(false);
+    const filtroArea = ref("todas");
+    const filtroBusca = ref("");
+    const formAberto = ref(false);
+    const editandoId = ref(null);
+
+    const formVazio = () => ({ equipamento: "", area: AREAS[0], certificadoRbc: "", laboratorio: "", dataCalibracao: "", dataValidade: "" });
+    const form = reactive(formVazio());
+
+    async function carregar() {
+      loading.value = true;
+      erro.value = "";
+      try {
+        const data = await getInitialData();
+        const raw = data.calibracoes || data.Calibracoes_Controle || data.calibracoesControle
+          || (data.data && (data.data.calibracoes || data.data.calibracoesControle)) || [];
+        lista.value = (Array.isArray(raw) ? raw : []).map(normalizeCalibracao);
+      } catch (err) {
+        console.error(err);
+        erro.value = "Não foi possível carregar os registros de Calibração & Medição.";
+      } finally {
+        loading.value = false;
+      }
+    }
+    onMounted(carregar);
+
+    const listaFiltrada = computed(() => {
+      const termo = filtroBusca.value.trim().toLowerCase();
+      return lista.value
+        .filter(c => filtroArea.value === "todas" || normalizarTexto(c.area) === normalizarTexto(filtroArea.value))
+        .filter(c => !termo || c.equipamento.toLowerCase().includes(termo) || c.certificadoRbc.toLowerCase().includes(termo))
+        .map(c => ({ ...c, status: statusValidadeCalibracao(c.dataValidade) }))
+        .sort((a, b) => (a.status.diffDias ?? Infinity) - (b.status.diffDias ?? Infinity));
+    });
+
+    function abrirNovo() {
+      Object.assign(form, formVazio());
+      editandoId.value = null;
+      formAberto.value = true;
+    }
+    function abrirEdicao(c) {
+      Object.assign(form, { equipamento: c.equipamento, area: c.area, certificadoRbc: c.certificadoRbc, laboratorio: c.laboratorio, dataCalibracao: c.dataCalibracao, dataValidade: c.dataValidade });
+      editandoId.value = c.id;
+      formAberto.value = true;
+    }
+    function fecharForm() {
+      formAberto.value = false;
+    }
+
+    async function salvar() {
+      if (!form.equipamento.trim()) {
+        pushToast("Informe o nome do equipamento.", "error");
+        return;
+      }
+      if (!form.dataValidade) {
+        pushToast("Informe a data de validade da calibração.", "error");
+        return;
+      }
+      salvando.value = true;
+      try {
+        const id = editandoId.value || "CAL-" + Date.now();
+        await saveCalibracaoApi({ id, ...form });
+        const idx = lista.value.findIndex(c => c.id === id);
+        const atualizado = { id, ...form };
+        if (idx === -1) lista.value.unshift(atualizado);
+        else lista.value[idx] = atualizado;
+        pushToast(editandoId.value ? "Calibração atualizada." : "Calibração cadastrada.", "success");
+        formAberto.value = false;
+        setTimeout(() => carregar(), 3000);
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao salvar. Tente novamente.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    function formatarData(v) {
+      const d = parseDataHoraLocal(v);
+      return d ? d.toLocaleDateString("pt-BR") : "-";
+    }
+
+    return {
+      loading, erro, listaFiltrada, areas: AREAS, filtroArea, filtroBusca,
+      formAberto, form, editandoId, salvando, abrirNovo, abrirEdicao, fecharForm, salvar, formatarData,
+    };
+  },
+  template: `
+  <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        <input v-model="filtroBusca" type="text" placeholder="Buscar equipamento ou certificado..."
+          class="sm:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <select v-model="filtroArea" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="todas">Setor: Todos</option>
+          <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <button @click="abrirNovo" class="btn-tap flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-lg text-sm py-2">
+          + Novo Cadastro
+        </button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+    <div v-else-if="listaFiltrada.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      Nenhum instrumento cadastrado em Calibração & Medição.
+    </div>
+    <div v-else class="space-y-2">
+      <button v-for="c in listaFiltrada" :key="c.id" @click="abrirEdicao(c)"
+        class="btn-tap w-full text-left bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-sky-300 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-bold text-slate-800 truncate">{{ c.equipamento }}</p>
+          <p class="text-xs text-slate-500 mt-0.5">{{ c.area || "—" }} · Certificado RBC: {{ c.certificadoRbc || "—" }}</p>
+          <p class="text-xs text-slate-400 mt-0.5">Validade: {{ formatarData(c.dataValidade) }}</p>
+        </div>
+        <span class="text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap" :class="c.status.cls">{{ c.status.cor }} {{ c.status.label }}</span>
+      </button>
+    </div>
+
+    <div v-if="formAberto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+      <div class="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">{{ editandoId ? "Editar Calibração" : "Novo Cadastro de Calibração" }}</h3>
+          <button @click="fecharForm" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Equipamento *</label>
+          <input v-model="form.equipamento" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Setor/Área</label>
+          <select v-model="form.area" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Número do Certificado RBC</label>
+          <input v-model="form.certificadoRbc" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Laboratório</label>
+          <input v-model="form.laboratorio" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Data da Calibração</label>
+            <input v-model="form.dataCalibracao" type="date" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Validade *</label>
+            <input v-model="form.dataValidade" type="date" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+        </div>
+        <button @click="salvar" :disabled="salvando" class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl text-sm">
+          <span v-if="salvando" class="spinner"></span>
+          <span>{{ salvando ? "Salvando..." : "Salvar" }}</span>
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO GESTÃO DE ATIVOS (cadastro de equipamentos)
+   ========================================================================== */
+const GestaoAtivosModule = {
+  emits: ["go-home"],
+  setup() {
+    const loading = ref(true);
+    const erro = ref("");
+    const lista = ref([]);
+    const salvando = ref(false);
+    const alternandoId = ref(null);
+    const filtroStatus = ref("ativos"); // 'ativos' | 'inativos' | 'todos'
+    const filtroBusca = ref("");
+    const formAberto = ref(false);
+    const editandoId = ref(null);
+
+    const formVazio = () => ({ nome: "", area: AREAS[0], modelo: "", tag: "", periodicidade: PERIODICIDADES_ORDEM[3] || "Mensal", itensInspecao: "" });
+    const form = reactive(formVazio());
+
+    async function carregar() {
+      loading.value = true;
+      erro.value = "";
+      try {
+        const data = await getInitialData();
+        const raw = comFallbackEquipamentosTI(data.equipamentos || data.Equipamentos || (data.data && data.data.equipamentos) || []);
+        lista.value = raw.map(e => ({
+          id: e.ID || e.Id || e.id || uid(),
+          nome: e.Nome || e.Equipamento || e.nome || "Equipamento",
+          area: e.Area || e.area || "",
+          modelo: e.Modelo || e.modelo || "",
+          tag: e.TAG || e.Tag || e.tag || "",
+          periodicidade: normalizePeriodicidade(e.Periodicidade || e.periodicidade || ""),
+          itensInspecao: e.Itens_Inspecao_Recomendados || e.itens_inspecao_recomendados || "",
+          // Sem a coluna "Ativo" cadastrada, todo equipamento existente é
+          // considerado ativo — nunca esconde o parque atual por omissão.
+          ativo: !["não", "nao", "false", "0", "inativo"].includes(normalizarTexto(e.Ativo ?? e.ativo ?? e.Status ?? e.status ?? "sim")),
+        }));
+      } catch (err) {
+        console.error(err);
+        erro.value = "Não foi possível carregar o cadastro de equipamentos.";
+      } finally {
+        loading.value = false;
+      }
+    }
+    onMounted(carregar);
+
+    const listaFiltrada = computed(() => {
+      const termo = filtroBusca.value.trim().toLowerCase();
+      return lista.value
+        .filter(e => filtroStatus.value === "todos" || (filtroStatus.value === "ativos" ? e.ativo : !e.ativo))
+        .filter(e => !termo || e.nome.toLowerCase().includes(termo) || e.area.toLowerCase().includes(termo))
+        .sort((a, b) => a.nome.localeCompare(b.nome));
+    });
+
+    function abrirNovo() {
+      Object.assign(form, formVazio());
+      editandoId.value = null;
+      formAberto.value = true;
+    }
+    function abrirEdicao(e) {
+      Object.assign(form, { nome: e.nome, area: e.area, modelo: e.modelo, tag: e.tag, periodicidade: e.periodicidade, itensInspecao: e.itensInspecao });
+      editandoId.value = e.id;
+      formAberto.value = true;
+    }
+    function fecharForm() {
+      formAberto.value = false;
+    }
+
+    async function salvar() {
+      if (!form.nome.trim()) {
+        pushToast("Informe o nome do equipamento.", "error");
+        return;
+      }
+      salvando.value = true;
+      try {
+        const id = editandoId.value || "EQ-" + Date.now();
+        await saveEquipamentoApi({ id, ...form, ativo: true });
+        const idx = lista.value.findIndex(e => e.id === id);
+        const atualizado = { id, ...form, ativo: idx === -1 ? true : lista.value[idx].ativo };
+        if (idx === -1) lista.value.unshift(atualizado);
+        else lista.value[idx] = atualizado;
+        pushToast(editandoId.value ? "Equipamento atualizado." : "Equipamento cadastrado.", "success");
+        formAberto.value = false;
+        setTimeout(() => carregar(), 3000);
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao salvar. Tente novamente.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    async function alternarAtivo(e) {
+      alternandoId.value = e.id;
+      const novoStatus = !e.ativo;
+      try {
+        await saveEquipamentoApi({ id: e.id, nome: e.nome, area: e.area, modelo: e.modelo, tag: e.tag, periodicidade: e.periodicidade, itensInspecao: e.itensInspecao, ativo: novoStatus });
+        e.ativo = novoStatus;
+        pushToast(`${e.nome} ${novoStatus ? "ativado" : "inativado"}.`, "success");
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao atualizar o status do equipamento.", "error");
+      } finally {
+        alternandoId.value = null;
+      }
+    }
+
+    return {
+      loading, erro, listaFiltrada, areas: AREAS, periodicidades: PERIODICIDADES_ORDEM,
+      filtroStatus, filtroBusca, formAberto, form, editandoId, salvando, alternandoId,
+      abrirNovo, abrirEdicao, fecharForm, salvar, alternarAtivo,
+    };
+  },
+  template: `
+  <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        <input v-model="filtroBusca" type="text" placeholder="Buscar equipamento ou setor..."
+          class="sm:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <select v-model="filtroStatus" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option value="ativos">Somente Ativos</option>
+          <option value="inativos">Somente Inativos</option>
+          <option value="todos">Todos</option>
+        </select>
+        <button @click="abrirNovo" class="btn-tap flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-lg text-sm py-2">
+          + Novo Equipamento
+        </button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+    <div v-else-if="listaFiltrada.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      Nenhum equipamento encontrado.
+    </div>
+    <div v-else class="space-y-2">
+      <div v-for="e in listaFiltrada" :key="e.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between gap-3">
+        <button @click="abrirEdicao(e)" class="btn-tap text-left min-w-0 flex-1">
+          <p class="font-bold text-slate-800 truncate">{{ e.nome }}</p>
+          <p class="text-xs text-slate-500 mt-0.5">{{ e.area || "—" }} · {{ e.periodicidade || "—" }}<span v-if="e.tag"> · {{ e.tag }}</span></p>
+        </button>
+        <label class="flex items-center gap-2 shrink-0 cursor-pointer">
+          <span class="text-xs font-semibold" :class="e.ativo ? 'text-emerald-600' : 'text-slate-400'">{{ e.ativo ? "Ativo" : "Inativo" }}</span>
+          <button @click="alternarAtivo(e)" :disabled="alternandoId === e.id"
+            class="btn-tap relative w-11 h-6 rounded-full transition-colors disabled:opacity-60" :class="e.ativo ? 'bg-emerald-500' : 'bg-slate-300'">
+            <span class="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all" :class="e.ativo ? 'left-5' : 'left-0.5'"></span>
+          </button>
+        </label>
+      </div>
+    </div>
+
+    <div v-if="formAberto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+      <div class="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">{{ editandoId ? "Editar Equipamento" : "Novo Equipamento" }}</h3>
+          <button @click="fecharForm" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Nome do Equipamento *</label>
+          <input v-model="form.nome" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Setor/Área</label>
+            <select v-model="form.area" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+              <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Periodicidade</label>
+            <select v-model="form.periodicidade" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+              <option v-for="p in periodicidades" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Modelo</label>
+            <input v-model="form.modelo" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">TAG</label>
+            <input v-model="form.tag" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Itens de Inspeção (separados por vírgula)</label>
+          <textarea v-model="form.itensInspecao" rows="3" placeholder="Ex: Nível de óleo, Ruídos, Vibrações"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+        </div>
+        <button @click="salvar" :disabled="salvando" class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl text-sm">
+          <span v-if="salvando" class="spinner"></span>
+          <span>{{ salvando ? "Salvando..." : "Salvar" }}</span>
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MÓDULO GESTÃO DE USUÁRIOS (apenas Administrador)
+   ========================================================================== */
+const PERFIS_USUARIO = ["Administrador", "Colaborador"];
+
+const GestaoUsuariosModule = {
+  emits: ["go-home"],
+  setup() {
+    const loading = ref(true);
+    const erro = ref("");
+    const lista = ref([]);
+    const salvando = ref(false);
+    const alternandoEmail = ref(null);
+    const filtroBusca = ref("");
+    const formAberto = ref(false);
+    const editando = ref(false);
+    // PIN escondido por padrão em cada linha — só revela sob clique
+    // explícito do administrador, evitando expor todos os PINs de uma vez
+    // (ex.: em captura de tela ou apresentação da tela).
+    const pinsVisiveis = reactive({});
+
+    const formVazio = () => ({ nome: "", email: "", cargo: "", area: AREAS[0], perfil: "Colaborador", pin: "" });
+    const form = reactive(formVazio());
+
+    async function carregar() {
+      loading.value = true;
+      erro.value = "";
+      try {
+        const data = await getInitialData();
+        const raw = data.usuarios || data.Usuarios || (data.data && data.data.usuarios) || [];
+        lista.value = (Array.isArray(raw) ? raw : []).map(u => ({
+          nome: u.Nome || u.nome || "Usuário",
+          email: u.Email || u.email || "",
+          cargo: u.Cargo || u.cargo || "",
+          area: u.Area || u.area || "",
+          perfil: u.Perfil || u.perfil || "Colaborador",
+          pin: (u.Senha_PIN || u.Senha || u.senha || u.PIN || u.pin || "").toString(),
+          ativo: !["não", "nao", "false", "0", "inativo"].includes(normalizarTexto(u.Ativo ?? u.ativo ?? u.Status ?? u.status ?? "sim")),
+        }));
+      } catch (err) {
+        console.error(err);
+        erro.value = "Não foi possível carregar a lista de usuários.";
+      } finally {
+        loading.value = false;
+      }
+    }
+    onMounted(carregar);
+
+    const listaFiltrada = computed(() => {
+      const termo = filtroBusca.value.trim().toLowerCase();
+      if (!termo) return lista.value;
+      return lista.value.filter(u => u.nome.toLowerCase().includes(termo) || u.email.toLowerCase().includes(termo));
+    });
+
+    function togglePinVisivel(email) {
+      pinsVisiveis[email] = !pinsVisiveis[email];
+    }
+
+    function abrirNovo() {
+      Object.assign(form, formVazio());
+      editando.value = false;
+      formAberto.value = true;
+    }
+    function fecharForm() {
+      formAberto.value = false;
+    }
+
+    async function salvarNovoUsuario() {
+      if (!form.nome.trim() || !form.email.trim() || !form.pin.trim()) {
+        pushToast("Informe nome, e-mail e PIN inicial.", "error");
+        return;
+      }
+      salvando.value = true;
+      try {
+        await saveUsuarioApi(form);
+        lista.value.unshift({ ...form, ativo: true });
+        pushToast("Colaborador cadastrado.", "success");
+        formAberto.value = false;
+        setTimeout(() => carregar(), 3000);
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao cadastrar colaborador. Tente novamente.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    async function alternarAtivo(u) {
+      alternandoEmail.value = u.email;
+      const novoStatus = !u.ativo;
+      try {
+        await saveUsuarioApi({ ...u, ativo: novoStatus });
+        u.ativo = novoStatus;
+        pushToast(`${u.nome} ${novoStatus ? "ativado" : "desativado"}.`, "success");
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao atualizar o status do usuário.", "error");
+      } finally {
+        alternandoEmail.value = null;
+      }
+    }
+
+    // ===== Alterar PIN de terceiros =====
+    const modalPinAberto = ref(false);
+    const usuarioAlvoPin = ref(null);
+    const novoPinValor = ref("");
+    const salvandoPin = ref(false);
+    function abrirAlterarPin(u) {
+      usuarioAlvoPin.value = u;
+      novoPinValor.value = "";
+      modalPinAberto.value = true;
+    }
+    function fecharAlterarPin() {
+      modalPinAberto.value = false;
+      usuarioAlvoPin.value = null;
+    }
+    async function confirmarAlterarPin() {
+      if (!novoPinValor.value.trim()) {
+        pushToast("Informe o novo PIN.", "error");
+        return;
+      }
+      salvandoPin.value = true;
+      try {
+        await updateUserPinApi({ email: usuarioAlvoPin.value.email, novoPin: novoPinValor.value.trim() });
+        usuarioAlvoPin.value.pin = novoPinValor.value.trim();
+        pushToast(`PIN de ${usuarioAlvoPin.value.nome} atualizado.`, "success");
+        fecharAlterarPin();
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao atualizar o PIN. Tente novamente.", "error");
+      } finally {
+        salvandoPin.value = false;
+      }
+    }
+
+    return {
+      loading, erro, listaFiltrada, filtroBusca, areas: AREAS, perfis: PERFIS_USUARIO,
+      pinsVisiveis, togglePinVisivel,
+      formAberto, form, editando, salvando, abrirNovo, fecharForm, salvarNovoUsuario,
+      alternandoEmail, alternarAtivo,
+      modalPinAberto, usuarioAlvoPin, novoPinValor, salvandoPin, abrirAlterarPin, fecharAlterarPin, confirmarAlterarPin,
+    };
+  },
+  template: `
+  <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <input v-model="filtroBusca" type="text" placeholder="Buscar por nome ou e-mail..."
+          class="sm:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <button @click="abrirNovo" class="btn-tap flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-lg text-sm py-2">
+          + Novo Colaborador
+        </button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+    <div v-else-if="listaFiltrada.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+      Nenhum usuário encontrado.
+    </div>
+    <div v-else class="space-y-2">
+      <div v-for="u in listaFiltrada" :key="u.email" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2.5">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="font-bold text-slate-800 truncate">{{ u.nome }}</p>
+            <p class="text-xs text-slate-500 truncate">{{ u.email }}</p>
+            <p class="text-xs text-slate-400 mt-0.5">{{ u.cargo || "—" }} · {{ u.area || "—" }}</p>
+          </div>
+          <div class="flex flex-col items-end gap-1.5 shrink-0">
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide"
+              :class="u.perfil === 'Administrador' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'">
+              {{ u.perfil }}
+            </span>
+            <button @click="alternarAtivo(u)" :disabled="alternandoEmail === u.email"
+              class="btn-tap relative w-11 h-6 rounded-full transition-colors disabled:opacity-60" :class="u.ativo ? 'bg-emerald-500' : 'bg-slate-300'"
+              :title="u.ativo ? 'Ativo — clique para desativar' : 'Inativo — clique para ativar'">
+              <span class="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all" :class="u.ativo ? 'left-5' : 'left-0.5'"></span>
+            </button>
+          </div>
+        </div>
+        <div class="flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-slate-400 font-semibold uppercase tracking-wide">PIN:</span>
+            <span class="font-mono font-bold text-slate-700">{{ pinsVisiveis[u.email] ? u.pin : "••••" }}</span>
+            <button @click="togglePinVisivel(u.email)" class="btn-tap text-sky-600 font-semibold">{{ pinsVisiveis[u.email] ? "Ocultar" : "Mostrar" }}</button>
+          </div>
+          <button @click="abrirAlterarPin(u)" class="btn-tap text-xs font-semibold text-sky-600 hover:text-sky-800">Alterar PIN</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="formAberto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+      <div class="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">Novo Colaborador</h3>
+          <button @click="fecharForm" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Nome *</label>
+          <input v-model="form.nome" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">E-mail *</label>
+          <input v-model="form.email" type="email" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Cargo</label>
+            <input v-model="form.cargo" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Setor/Área</label>
+            <select v-model="form.area" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+              <option v-for="a in areas" :key="a" :value="a">{{ a }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Perfil</label>
+            <select v-model="form.perfil" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+              <option v-for="p in perfis" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">PIN Inicial *</label>
+            <input v-model="form.pin" type="text" inputmode="numeric" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+        </div>
+        <button @click="salvarNovoUsuario" :disabled="salvando" class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl text-sm">
+          <span v-if="salvando" class="spinner"></span>
+          <span>{{ salvando ? "Salvando..." : "Cadastrar" }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="modalPinAberto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+      <div class="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">Alterar PIN de {{ usuarioAlvoPin && usuarioAlvoPin.nome }}</h3>
+          <button @click="fecharAlterarPin" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Novo PIN</label>
+          <input v-model="novoPinValor" type="text" inputmode="numeric" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <button @click="confirmarAlterarPin" :disabled="salvandoPin" class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl text-sm">
+          <span v-if="salvandoPin" class="spinner"></span>
+          <span>{{ salvandoPin ? "Salvando..." : "Confirmar" }}</span>
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
+   MODAL MEU PERFIL / TROCA DE PIN (todos os perfis)
+   ========================================================================== */
+const MeuPerfilModal = {
+  props: { user: Object },
+  emits: ["fechar"],
+  setup(props, { emit }) {
+    const pinAtual = ref("");
+    const novoPin = ref("");
+    const confirmarNovoPin = ref("");
+    const salvando = ref(false);
+
+    async function trocarPin() {
+      if (!pinAtual.value.trim() || !novoPin.value.trim()) {
+        pushToast("Informe o PIN atual e o novo PIN.", "error");
+        return;
+      }
+      if (novoPin.value.trim() !== confirmarNovoPin.value.trim()) {
+        pushToast("A confirmação do novo PIN não confere.", "error");
+        return;
+      }
+      salvando.value = true;
+      try {
+        const resp = await updateUserPinApi({ email: props.user.email, pinAtual: pinAtual.value.trim(), novoPin: novoPin.value.trim() });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao atualizar o PIN.");
+        pushToast("PIN atualizado com sucesso.", "success");
+        pinAtual.value = "";
+        novoPin.value = "";
+        confirmarNovoPin.value = "";
+      } catch (err) {
+        console.error(err);
+        pushToast(err.message || "Erro ao atualizar o PIN. Tente novamente.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    return { pinAtual, novoPin, confirmarNovoPin, salvando, trocarPin };
+  },
+  template: `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+    <div class="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-slate-800 flex items-center gap-1.5">👤 Meu Perfil</h3>
+        <button @click="$emit('fechar')" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+      </div>
+
+      <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 text-sm space-y-1">
+        <p><span class="text-slate-400">Nome:</span> <span class="font-semibold text-slate-800">{{ user.nome }}</span></p>
+        <p><span class="text-slate-400">E-mail:</span> <span class="font-medium text-slate-700">{{ user.email }}</span></p>
+        <p><span class="text-slate-400">Cargo:</span> <span class="font-medium text-slate-700">{{ user.cargo || "—" }}</span></p>
+        <p><span class="text-slate-400">Setor:</span> <span class="font-medium text-slate-700">{{ user.area || "—" }}</span></p>
+        <p><span class="text-slate-400">Perfil:</span> <span class="font-medium text-slate-700">{{ user.perfil || "Colaborador" }}</span></p>
+      </div>
+
+      <div class="space-y-3 border-t border-slate-100 pt-3">
+        <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide">Trocar meu PIN</h4>
+        <input v-model="pinAtual" type="password" inputmode="numeric" placeholder="PIN atual"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <input v-model="novoPin" type="password" inputmode="numeric" placeholder="Novo PIN"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <input v-model="confirmarNovoPin" type="password" inputmode="numeric" placeholder="Confirmar novo PIN"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <button @click="trocarPin" :disabled="salvando" class="btn-tap w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm">
+          <span v-if="salvando" class="spinner"></span>
+          <span>{{ salvando ? "Salvando..." : "Atualizar PIN" }}</span>
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
    APP PRINCIPAL (shell + navegação)
    ========================================================================== */
 const App = {
-  components: { ToastHost, LoginScreen, HomeHub, PreventivaModule, CorretivaModule, IndicadoresModule, DashboardModule },
+  components: {
+    ToastHost, LoginScreen, HomeHub, PreventivaModule, CorretivaModule, IndicadoresModule, DashboardModule,
+    CalibracaoModule, GestaoAtivosModule, GestaoUsuariosModule, MeuPerfilModal,
+  },
   setup() {
     const user = ref(null);
     const currentView = ref("home");
+    const perfilAberto = ref(false);
 
     // Blindagem contra tela em branco: qualquer erro de renderização/lifecycle
     // não tratado num módulo (ex: propriedade undefined vinda da planilha) é
@@ -5089,7 +6084,21 @@ const App = {
 
     function navigate(view) {
       erroRenderizacao.value = null;
+      // Gestão de Usuários é exclusiva do perfil Administrador — bloqueia
+      // mesmo que a navegação seja disparada por outro caminho além do card
+      // (o HomeHub já nem exibe o card para quem não é admin).
+      if (view === "usuarios" && !isAdmin(user.value)) {
+        pushToast("Apenas administradores podem acessar a Gestão de Usuários.", "error");
+        return;
+      }
       currentView.value = view;
+    }
+
+    function abrirPerfil() {
+      perfilAberto.value = true;
+    }
+    function fecharPerfil() {
+      perfilAberto.value = false;
     }
 
     const titulosModulo = {
@@ -5097,6 +6106,9 @@ const App = {
       corretiva: "Manutenção Corretiva",
       indicadores: "Indicadores (KPIs)",
       dashboard: "Dashboard Geral",
+      calibracao: "Calibração & Medição",
+      ativos: "Gestão de Ativos",
+      usuarios: "Gestão de Usuários",
     };
     const currentTitle = computed(() => titulosModulo[currentView.value] || "");
 
@@ -5109,7 +6121,7 @@ const App = {
 
     return {
       user, currentView, handleLoginSuccess, logout, irParaHome, navigate, currentTitle, cargoBadgeClass,
-      erroRenderizacao, tentarNovamenteRenderizacao,
+      erroRenderizacao, tentarNovamenteRenderizacao, perfilAberto, abrirPerfil, fecharPerfil,
     };
   },
   template: `
@@ -5141,6 +6153,9 @@ const App = {
                   {{ user.cargo || "Colaborador" }}
                 </span>
               </div>
+              <button @click="abrirPerfil" title="Meu Perfil" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 w-9 h-9 rounded-lg flex items-center justify-center shrink-0">
+                👤
+              </button>
               <button @click="logout" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0">
                 <span class="hidden sm:inline">Sair</span>
                 <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -5175,14 +6190,20 @@ const App = {
           </button>
         </div>
         <transition v-else name="fade" mode="out-in">
-          <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" key="home"></home-hub>
+          <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" @abrir-perfil="abrirPerfil" key="home"></home-hub>
           <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" @go-home="irParaHome" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
           <indicadores-module v-else-if="currentView === 'indicadores'" key="ind"></indicadores-module>
-          <dashboard-module v-else @navigate="navigate" key="dash"></dashboard-module>
+          <calibracao-module v-else-if="currentView === 'calibracao'" key="calib"></calibracao-module>
+          <gestao-ativos-module v-else-if="currentView === 'ativos'" key="ativos"></gestao-ativos-module>
+          <gestao-usuarios-module v-else-if="currentView === 'usuarios' && user && user.perfil === 'Administrador'" key="usuarios"></gestao-usuarios-module>
+          <dashboard-module v-else-if="currentView === 'dashboard'" @navigate="navigate" key="dash"></dashboard-module>
+          <home-hub v-else :user="user" @navigate="navigate" @abrir-perfil="abrirPerfil" key="home-fallback"></home-hub>
         </transition>
       </main>
     </div>
+
+    <meu-perfil-modal v-if="perfilAberto" :user="user" @fechar="fecharPerfil"></meu-perfil-modal>
   </div>`
 };
 
