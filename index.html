@@ -4983,7 +4983,7 @@ const HomeHub = {
    MÓDULO INDICADORES — Dashboard Executivo Interativo (Chart.js)
    ========================================================================== */
 const CORES_DASHBOARD = {
-  preventiva: "#10b981",  // emerald-500
+  preventiva: "#64748b",  // slate-500 — mesma cor do card "Conformidade" (Preventivas)
   corretiva: "#ef4444",   // red-500
   barra: "#0ea5e9",       // sky-500
   prioridade: ["#60a5fa", "#fbbf24", "#fb923c", "#dc2626"], // Baixa/Média/Alta/Crítica
@@ -5322,7 +5322,11 @@ const IndicadoresModule = {
         const idx = buckets.findIndex((b, i) => i > 0 && b.ano === d.getFullYear() && b.mes === d.getMonth() + 1);
         if (idx !== -1) valores[idx]++;
       });
-      return { labels: buckets.map(b => b.label), valores };
+      // "Vencidos" em vermelho (mesma cor do card Críticos/Vencidos) e os
+      // meses futuros em verde-esmeralda (mesma cor do card Conformidade
+      // Geral) — ainda dentro do prazo, portanto conformes até lá.
+      const cores = buckets.map((_, i) => (i === 0 ? "#ef4444" : "#10b981"));
+      return { labels: buckets.map(b => b.label), valores, cores };
     });
 
     // ===== Gráfico: Instrumentos por Setor Fabril (donut) =====
@@ -5442,7 +5446,7 @@ const IndicadoresModule = {
         const d = dadosPrevisaoVencimentos.value;
         chartPrevisaoVencimentos = new Chart(canvasPrevisaoVencimentosRef.value, {
           type: "bar",
-          data: { labels: d.labels, datasets: [{ label: "Instrumentos", data: d.valores, backgroundColor: "#0ea5e9", borderRadius: 4 }] },
+          data: { labels: d.labels, datasets: [{ label: "Instrumentos", data: d.valores, backgroundColor: d.cores, borderRadius: 4 }] },
           options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
@@ -5551,9 +5555,9 @@ const IndicadoresModule = {
     <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
     <template v-else>
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">Conformidade</p>
-          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ formatarPercentual(taxaConformidade) }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-slate-50 border-slate-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">Conformidade</p>
+          <p class="text-3xl font-extrabold text-slate-600 mt-1">{{ formatarPercentual(taxaConformidade) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Itens conformes / avaliados</p>
         </div>
         <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
@@ -5561,14 +5565,14 @@ const IndicadoresModule = {
           <p class="text-3xl font-extrabold text-indigo-600 mt-1">{{ formatarPercentual(aderenciaPlano) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Executadas no prazo / programadas</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">MTTR</p>
-          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ formatarHoras(mttr) }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-purple-50 border-purple-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">MTTR</p>
+          <p class="text-3xl font-extrabold text-purple-600 mt-1">{{ formatarHoras(mttr) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Tempo médio de reparo</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">MTBF (estimado)</p>
-          <p class="text-3xl font-extrabold text-sky-600 mt-1">{{ formatarMtbf(mtbf) }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-blue-50 border-blue-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">MTBF (estimado)</p>
+          <p class="text-3xl font-extrabold text-blue-600 mt-1">{{ formatarMtbf(mtbf) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Horas de operação / corretivas</p>
         </div>
       </div>
@@ -5658,28 +5662,28 @@ const IndicadoresModule = {
     <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
     <template v-else>
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">🟢 Conformidade Geral</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-emerald-50 border-emerald-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">🟢 Conformidade Geral</p>
           <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ formatarPercentual(kpiCalibracao.conformidadeGeral) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">No Prazo / Total de instrumentos</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">⏱️ Aderência às Checagens</p>
-          <p class="text-3xl font-extrabold text-indigo-600 mt-1">{{ formatarPercentual(kpiCalibracao.aderenciaChecagens) }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-cyan-50 border-cyan-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">⏱️ Aderência às Checagens</p>
+          <p class="text-3xl font-extrabold text-cyan-600 mt-1">{{ formatarPercentual(kpiCalibracao.aderenciaChecagens) }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Checagens em dia / com checagem ativa</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">🟡 Vencendo em 45 dias</p>
-          <p class="text-3xl font-extrabold text-amber-500 mt-1">{{ kpiCalibracao.atencao }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-amber-50 border-amber-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">🟡 Vencendo em 45 dias</p>
+          <p class="text-3xl font-extrabold text-amber-600 mt-1">{{ kpiCalibracao.atencao }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Requerem agendamento de laboratório</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">🟠 Em Calibração Externa</p>
-          <p class="text-3xl font-extrabold text-orange-500 mt-1">{{ kpiCalibracao.emCalibracao }}</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-orange-50 border-orange-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">🟠 Em Calibração Externa</p>
+          <p class="text-3xl font-extrabold text-orange-600 mt-1">{{ kpiCalibracao.emCalibracao }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Encaminhados ao laboratório</p>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <p class="text-xs text-slate-400 font-semibold uppercase">🔴 Críticos / Vencidos</p>
+        <div class="rounded-xl border p-4 shadow-sm bg-red-50 border-red-500">
+          <p class="text-xs text-slate-500 font-semibold uppercase">🔴 Críticos / Vencidos</p>
           <p class="text-3xl font-extrabold text-red-600 mt-1">{{ kpiCalibracao.vencidos }}</p>
           <p class="text-[11px] text-slate-400 mt-1">Fora do prazo de calibração</p>
         </div>
