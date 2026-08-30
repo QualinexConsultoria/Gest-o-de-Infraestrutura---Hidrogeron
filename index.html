@@ -1080,6 +1080,22 @@ function parseBooleanoFlexivel(v) {
   return ["sim", "true", "1", "em calibracao", "em transito", "enviado", "enviado ao laboratorio"].includes(s);
 }
 
+// parseFloat("18,90") retorna 18 (para no separador decimal brasileiro),
+// truncando os centavos silenciosamente. Números vindos da planilha (ex.:
+// "Custo Produto", "Qtde Não Conforme") podem vir formatados com vírgula
+// decimal, então a vírgula é convertida para ponto antes do parseFloat.
+function parseNumeroFlexivel(v) {
+  if (typeof v === "number") return v;
+  if (v === undefined || v === null || v === "") return 0;
+  let s = String(v).trim();
+  // Só trata vírgula como separador decimal (e ponto como milhar) quando a
+  // vírgula está de fato presente — evita corromper um valor já no formato
+  // americano ("18.9"), que deve seguir intacto.
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // Formata um Date local como "YYYY-MM-DD" sem passar por toISOString (que
 // converte para UTC e pode deslocar o dia em fusos negativos) — usado para
 // gravar Data de Checagem/Vencimento em <input type="date"> e no payload.
@@ -1265,19 +1281,25 @@ const CAMPOS_ISHIKAWA = [
 // Porquês, Ishikawa 6M, Causa & Consequência) são colunas simples (texto),
 // nunca um blob serializado — os helpers de API deste app enviam o payload
 // via querystring (URLSearchParams), que não preserva objetos aninhados.
+// Cabeçalho real da planilha oficial (colunas com espaço/acento, ex.: "RNC
+// Nº", "Cód. Produto") não batia com os nomes assumidos originalmente,
+// deixando a tabela em branco mesmo com dados gravados — mesmo problema já
+// visto (e corrigido) em normalizeCalibracao. Cada campo aceita a coluna
+// literal da planilha, variações antigas/novas e minúsculas.
 function normalizeRnc(r) {
   return {
-    id: r.ID || r.Id || r.id || uid(),
-    codigo: r.Codigo_Produto || r.CodigoProduto || r.codigo_produto || r.Codigo || r.codigo || "",
-    descricao: r.Descricao_Produto || r.DescricaoProduto || r.descricao_produto || r.Descricao || r.descricao || "",
-    op: r.OP || r.Op || r.op || "",
-    quantidadeNc: Number(r.Quantidade_NC ?? r.QuantidadeNC ?? r.quantidade_nc ?? r.quantidadeNc ?? 0) || 0,
+    id: r["RNC Nº"] || r.RNC_No || r.ID || r.Id || r.id || r.idRNC || uid(),
+    codigo: r["Cód. Produto"] || r.Cod_Produto || r.Codigo_Produto || r.CodigoProduto || r.codigo_produto || r.Codigo || r.codigo || r.codProduto || "",
+    descricao: r["Descrição"] || r.Descricao_Produto || r.DescricaoProduto || r.descricao_produto || r.Descricao || r.descricao || "",
+    setor: r["Setor/Departamento"] || r.Setor_Departamento || r.Setor || r.setor || "",
+    op: r["Nº OP"] || r.No_OP || r.OP || r.Op || r.op || r.numOP || "",
+    quantidadeNc: parseNumeroFlexivel(r["Qtde Não Conforme"] ?? r.Qtde_NC ?? r.Quantidade_NC ?? r.QuantidadeNC ?? r.quantidade_nc ?? r.quantidadeNc ?? r.qtd ?? r.quantidade ?? 0),
     quantidadeRecebida: Number(r.Quantidade_Recebida ?? r.QuantidadeRecebida ?? r.quantidade_recebida ?? r.quantidadeRecebida ?? 0) || 0,
-    origem: r.Origem || r.origem || "",
+    origem: r["Origem da Ocorrência"] || r.Origem_Ocorrencia || r.Origem || r.origem || "",
     descricaoDefeito: r.Descricao_Defeito || r.DescricaoDefeito || r.descricao_defeito || r.descricaoDefeito || "",
     dataAbertura: r.Data_Abertura || r.DataAbertura || r.data_abertura || r.dataAbertura || "",
-    analista: r.Analista || r.analista || r.Responsavel || r.responsavel || "",
-    reincidente: parseBooleanoFlexivel(r.Reincidente ?? r.reincidente),
+    analista: r["Responsável pela Emissão"] || r.Responsavel_Emissao || r.emissor || r.Analista || r.analista || r.Responsavel || r.responsavel || "",
+    reincidente: parseBooleanoFlexivel(r["Reincidente"] ?? r.Reincidente ?? r.reincidente),
     metodoCausa: r.Metodo_Causa || r.MetodoCausa || r.metodo_causa || r.metodoCausa || "5porques",
     porque1: r.Porque_1 || r.porque1 || "",
     porque2: r.Porque_2 || r.porque2 || "",
@@ -1292,12 +1314,16 @@ function normalizeRnc(r) {
     ishikawaMedicao: r.Ishikawa_Medicao || r.ishikawaMedicao || "",
     causaConsequenciaCausa: r.Causa_Consequencia_Causa || r.causaConsequenciaCausa || "",
     causaConsequenciaConsequencia: r.Causa_Consequencia_Consequencia || r.causaConsequenciaConsequencia || "",
-    causaRaiz: r.Causa_Raiz || r.CausaRaiz || r.causa_raiz || r.causaRaiz || "",
-    disposicao: r.Disposicao || r.disposicao || "",
-    custoUnitario: Number(r.Custo_Unitario ?? r.CustoUnitario ?? r.custo_unitario ?? r.custoUnitario ?? 0) || 0,
+    causaRaiz: r["Causa da Não Conformidade"] || r.Causa_Final || r.Causa_Raiz || r.CausaRaiz || r.causa_raiz || r.causaRaiz || r.causa || "",
+    disposicao: r["Disposição para o item não conforme"] || r.Disposicao || r.disposicao || "",
+    custoUnitario: parseNumeroFlexivel(r["Custo Produto"] ?? r.Custo_Unitario ?? r.CustoUnitario ?? r.custo_unitario ?? r.custoUnitario ?? r.custo ?? 0),
     reinspecao: r.Reinspecao || r.reinspecao || "",
     racpNecessario: parseBooleanoFlexivel(r.RACP_Necessario ?? r.RacpNecessario ?? r.racpNecessario),
     mapeamentoRisco: parseBooleanoFlexivel(r.Mapeamento_Risco ?? r.MapeamentoRisco ?? r.mapeamentoRisco),
+    // Status textual da própria planilha — usado como fonte da verdade do
+    // badge (ver statusRnc), no mesmo espírito de classificarStatusPlanilha
+    // em Calibração: nunca recalculado por completude de campos no front-end.
+    statusBruto: (r["STATUS"] || r.Status || r.status || "CONCLUÍDO").toString().trim(),
   };
 }
 
@@ -1305,14 +1331,14 @@ function prejuizoRnc(r) {
   return (Number(r && r.quantidadeNc) || 0) * (Number(r && r.custoUnitario) || 0);
 }
 
-// Fechada só quando as 3 etapas do formulário foram de fato concluídas
-// (causa raiz registrada, disposição definida e reinspeção realizada) —
-// enquanto qualquer uma faltar, a RNC conta como pendente de investigação
-// para o alerta automático de login.
+// Badge de status: espelha o texto da coluna Status da planilha em vez de
+// recalcular por completude dos campos — "CONCLUÍDO" (ou variação de
+// acento/caixa) é verde; "EM ANÁLISE", vazio ou qualquer outro valor é
+// âmbar, nunca ficando sem cor.
 function statusRnc(r) {
-  const completo = !!(r && r.causaRaiz && r.causaRaiz.trim() && r.disposicao && r.reinspecao);
-  if (completo) return { label: "Fechado", cor: "🟢", cls: "bg-emerald-100 text-emerald-700" };
-  return { label: "Em Análise", cor: "🟡", cls: "bg-amber-100 text-amber-700" };
+  const bruto = normalizarTexto((r && r.statusBruto) || "");
+  if (bruto.includes("concluido")) return { label: "Concluído", cor: "🟢", cls: "bg-emerald-100 text-emerald-800" };
+  return { label: "Em Análise", cor: "🟡", cls: "bg-amber-100 text-amber-800" };
 }
 
 // Reincidência: mesmo código de produto, ou descrição igual/uma contida na
@@ -6017,6 +6043,7 @@ const LaudoRncModal = {
             <p><span class="text-slate-400">Código:</span> <span class="font-medium text-slate-800">{{ rnc.codigo || '-' }}</span></p>
             <p><span class="text-slate-400">OP:</span> <span class="font-medium text-slate-800">{{ rnc.op || '-' }}</span></p>
             <p class="col-span-2"><span class="text-slate-400">Descrição:</span> <span class="font-medium text-slate-800">{{ rnc.descricao || '-' }}</span></p>
+            <p><span class="text-slate-400">Setor/Departamento:</span> <span class="font-medium text-slate-800">{{ rnc.setor || '-' }}</span></p>
             <p><span class="text-slate-400">Qtd. Não Conforme:</span> <span class="font-medium text-slate-800">{{ rnc.quantidadeNc }}</span></p>
             <p><span class="text-slate-400">Qtd. Recebida:</span> <span class="font-medium text-slate-800">{{ rnc.quantidadeRecebida || '-' }}</span></p>
             <p><span class="text-slate-400">Origem:</span> <span class="font-medium text-slate-800">{{ rnc.origem || '-' }}</span></p>
@@ -6334,7 +6361,7 @@ const RncModule = {
       return {
         total: l.length,
         emAnalise: l.filter(r => r.status.label === "Em Análise").length,
-        fechadas: l.filter(r => r.status.label === "Fechado").length,
+        fechadas: l.filter(r => r.status.label === "Concluído").length,
         reincidentes: l.filter(r => r.reincidente).length,
         custoTotal: l.reduce((s, r) => s + r.prejuizo, 0),
       };
@@ -6360,7 +6387,7 @@ const RncModule = {
     const causasSugeridas = ref([]);
 
     const formVazio = () => ({
-      codigo: "", descricao: "", op: "", quantidadeNc: null, quantidadeRecebida: null,
+      codigo: "", descricao: "", setor: "", op: "", quantidadeNc: null, quantidadeRecebida: null,
       origem: ORIGENS_RNC[0], descricaoDefeito: "", analista: (props.user && props.user.nome) || "",
       dataAbertura: "", reincidente: false, metodoCausa: "5porques",
       porque1: "", porque2: "", porque3: "", porque4: "", porque5: "",
@@ -6390,7 +6417,7 @@ const RncModule = {
     }
     function abrirEdicao(r) {
       Object.assign(form, formVazio(), {
-        codigo: r.codigo, descricao: r.descricao, op: r.op, quantidadeNc: r.quantidadeNc, quantidadeRecebida: r.quantidadeRecebida,
+        codigo: r.codigo, descricao: r.descricao, setor: r.setor, op: r.op, quantidadeNc: r.quantidadeNc, quantidadeRecebida: r.quantidadeRecebida,
         origem: r.origem, descricaoDefeito: r.descricaoDefeito, analista: r.analista, dataAbertura: r.dataAbertura,
         metodoCausa: r.metodoCausa, porque1: r.porque1, porque2: r.porque2, porque3: r.porque3, porque4: r.porque4, porque5: r.porque5,
         ishikawaMetodo: r.ishikawaMetodo, ishikawaMaquina: r.ishikawaMaquina, ishikawaMaoDeObra: r.ishikawaMaoDeObra,
@@ -6454,7 +6481,7 @@ const RncModule = {
         const id = editandoId.value || "RNC-" + Date.now();
         const dataAbertura = form.dataAbertura || formatarDataISO(new Date());
         await saveRPNCApi({
-          id, Codigo_Produto: form.codigo, Descricao_Produto: form.descricao, OP: form.op,
+          id, Codigo_Produto: form.codigo, Descricao_Produto: form.descricao, Setor_Departamento: form.setor, OP: form.op,
           Quantidade_NC: form.quantidadeNc, Quantidade_Recebida: form.quantidadeRecebida, Origem: form.origem,
           Descricao_Defeito: form.descricaoDefeito, Data_Abertura: dataAbertura, Analista: form.analista,
           Reincidente: form.reincidente, Metodo_Causa: form.metodoCausa,
@@ -6466,7 +6493,7 @@ const RncModule = {
           Reinspecao: form.reinspecao, RACP_Necessario: form.racpNecessario, Mapeamento_Risco: form.mapeamentoRisco,
         });
         const atualizado = normalizeRnc({
-          ID: id, Codigo_Produto: form.codigo, Descricao_Produto: form.descricao, OP: form.op,
+          ID: id, Codigo_Produto: form.codigo, Descricao_Produto: form.descricao, Setor_Departamento: form.setor, OP: form.op,
           Quantidade_NC: form.quantidadeNc, Quantidade_Recebida: form.quantidadeRecebida, Origem: form.origem,
           Descricao_Defeito: form.descricaoDefeito, Data_Abertura: dataAbertura, Analista: form.analista,
           Reincidente: form.reincidente, Metodo_Causa: form.metodoCausa,
@@ -6539,7 +6566,7 @@ const RncModule = {
         <p class="text-3xl font-extrabold text-amber-600 mt-1">{{ resumo.emAnalise }}</p>
       </div>
       <div class="rounded-xl border p-4 shadow-sm bg-emerald-50 border-emerald-500">
-        <p class="text-xs text-slate-500 font-semibold uppercase">🟢 Fechadas</p>
+        <p class="text-xs text-slate-500 font-semibold uppercase">🟢 Concluídas</p>
         <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ resumo.fechadas }}</p>
       </div>
       <div class="rounded-xl border p-4 shadow-sm bg-orange-50 border-orange-500">
@@ -6559,7 +6586,7 @@ const RncModule = {
         <select v-model="filtroStatus" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
           <option value="todos">Status: Todos</option>
           <option value="Em Análise">🟡 Em Análise</option>
-          <option value="Fechado">🟢 Fechado</option>
+          <option value="Concluído">🟢 Concluído</option>
         </select>
         <select v-model="filtroOrigem" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
           <option value="todas">Origem: Todas</option>
@@ -6584,6 +6611,7 @@ const RncModule = {
           <tr class="bg-slate-800 text-white">
             <th class="px-3 py-2 text-left whitespace-nowrap">Código</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">Descrição</th>
+            <th class="px-3 py-2 text-left whitespace-nowrap">Setor</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">OP</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">Origem</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">Qtd. NC</th>
@@ -6598,6 +6626,7 @@ const RncModule = {
               <button @click="abrirEdicao(r)" class="btn-tap font-mono font-bold text-sky-700 hover:underline whitespace-nowrap">{{ r.codigo || "-" }}</button>
             </td>
             <td class="px-3 py-2 min-w-[140px] text-slate-700">{{ r.descricao || "-" }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.setor || "-" }}</td>
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.op || "-" }}</td>
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.origem || "-" }}</td>
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.quantidadeNc }}</td>
@@ -6651,6 +6680,10 @@ const RncModule = {
             <div>
               <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Descrição do Produto *</label>
               <input v-model="form.descricao" @input="verificarReincidencia" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Setor/Departamento</label>
+              <input v-model="form.setor" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
             </div>
 
             <div v-if="relacionadas.length" class="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-1.5">
