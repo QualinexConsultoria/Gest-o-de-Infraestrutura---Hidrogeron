@@ -5323,14 +5323,20 @@ const IndicadoresModule = {
         if (idx !== -1) valores[idx]++;
       });
       // "Vencidos" em vermelho (mesma cor do card Críticos/Vencidos) e os
-      // meses futuros em verde-esmeralda (mesma cor do card Conformidade
-      // Geral) — ainda dentro do prazo, portanto conformes até lá.
-      const cores = buckets.map((_, i) => (i === 0 ? "#ef4444" : "#10b981"));
+      // meses futuros em azul cobalto — verde já é a cor reservada de
+      // "Conformidade Geral" nos cards, então não é reaproveitado aqui para
+      // evitar o mesmo conflito de significado que motivou esta paleta.
+      const cores = buckets.map((_, i) => (i === 0 ? "#ef4444" : "#3b82f6"));
       return { labels: buckets.map(b => b.label), valores, cores };
     });
 
-    // ===== Gráfico: Instrumentos por Setor Fabril (donut) =====
-    const CORES_SETOR_CALIBRACAO = ["#0ea5e9", "#f59e0b", "#8b5cf6", "#10b981", "#ef4444", "#ec4899", "#14b8a6", "#64748b", "#f97316", "#6366f1"];
+    // ===== Gráfico: Instrumentos por Setor Fabril (barras horizontais) =====
+    // Convertido de rosca para barras: com muitos setores cadastrados, fatias
+    // de donut ficam finas demais para distinguir e a legenda de baixo vira
+    // uma parede de quadradinhos coloridos. Barras horizontais ordenadas do
+    // maior para o menor, com uma única cor sólida e o nome do setor direto
+    // no eixo Y, leem muito melhor nesse cenário.
+    const COR_SETOR_CALIBRACAO = "#4f46e5"; // indigo-600
     const dadosPorSetorCalibracao = computed(() => {
       const contagem = {};
       calibracoes.value.forEach(c => {
@@ -5338,11 +5344,7 @@ const IndicadoresModule = {
         contagem[chave] = (contagem[chave] || 0) + 1;
       });
       const ordenado = Object.entries(contagem).sort((a, b) => b[1] - a[1]);
-      return {
-        labels: ordenado.map(x => x[0]),
-        valores: ordenado.map(x => x[1]),
-        cores: ordenado.map((_, i) => CORES_SETOR_CALIBRACAO[i % CORES_SETOR_CALIBRACAO.length]),
-      };
+      return { labels: ordenado.map(x => x[0]), valores: ordenado.map(x => x[1]) };
     });
 
     // ===== Gráfico: Distribuição por Grandeza Metrológica (barras horizontais) =====
@@ -5458,9 +5460,19 @@ const IndicadoresModule = {
       if (canvasSetorCalibracaoRef.value) {
         const d = dadosPorSetorCalibracao.value;
         chartSetorCalibracao = new Chart(canvasSetorCalibracaoRef.value, {
-          type: "doughnut",
-          data: { labels: d.labels, datasets: [{ data: d.valores, backgroundColor: d.cores }] },
-          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } } },
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Instrumentos", data: d.valores, backgroundColor: COR_SETOR_CALIBRACAO, borderRadius: 4 }] },
+          options: {
+            indexAxis: "y", responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x} instrumento${ctx.parsed.x === 1 ? "" : "s"}` } },
+            },
+            scales: {
+              x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: "rgba(148, 163, 184, 0.15)" } },
+              y: { grid: { display: false } },
+            },
+          },
         });
       }
 
@@ -5696,9 +5708,9 @@ const IndicadoresModule = {
             <canvas ref="canvasPrevisaoVencimentosRef"></canvas>
           </div>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
           <h3 class="font-bold text-slate-700 mb-3">Instrumentos por Setor Fabril</h3>
-          <div style="height: 240px">
+          <div style="height: 340px">
             <canvas ref="canvasSetorCalibracaoRef"></canvas>
           </div>
         </div>
