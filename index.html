@@ -1192,6 +1192,37 @@ function statusInstrumentoCalibracao(c) {
 function gerarUrlInstrumento(id) {
   return `${location.origin}${location.pathname}#calibracao/${encodeURIComponent(id)}`;
 }
+
+// Colunas compostas reaproveitadas tanto pela tabela de Calibração & Medição
+// quanto pelo Dashboard Metrológico em Indicadores: mesmas regras de
+// fallback do mapeamento de colunas da planilha, aplicadas na exibição para
+// nunca deixar a célula em branco.
+function nomeInstrumentoModelo(c) {
+  return [c.equipamento, c.modelo].filter(Boolean).join(" - ") || "-";
+}
+function capacidadeTolerancia(c) {
+  if (c.capacidade && c.tolerancia) return `${c.capacidade} | ${c.tolerancia}`;
+  return c.capacidade || c.tolerancia || "-";
+}
+
+// Classificação por grandeza metrológica a partir do nome/descrição do
+// instrumento — usada só no Dashboard Metrológico & Calibração (Indicadores)
+// para agrupar visualmente por tipo de medição. Palavras-chave em português,
+// sem acento (compara via normalizarTexto), cobrindo os instrumentos comuns
+// de fábrica; qualquer nome não reconhecido cai em "Outros".
+const CORES_GRANDEZA = {
+  Dimensional: "#0ea5e9", "Elétrica": "#f59e0b", "Pressão": "#8b5cf6",
+  Temperatura: "#ef4444", Massa: "#10b981", Outros: "#64748b",
+};
+function classificarGrandezaMetrologica(nomeInstrumento) {
+  const n = normalizarTexto(nomeInstrumento || "");
+  if (/paquimetro|micrometro|trena|escala|calibre|relogio comparador|goniometro/.test(n)) return "Dimensional";
+  if (/alicate|multimetro|megometro|terrometro|voltimetro|amperimetro|wattimetro/.test(n)) return "Elétrica";
+  if (/manometro|vacuometro|pressao/.test(n)) return "Pressão";
+  if (/mufla|termometro|termopar|termohigrometro|estufa|forno|temperatura/.test(n)) return "Temperatura";
+  if (/balanca|peso padrao|massa/.test(n)) return "Massa";
+  return "Outros";
+}
 function extrairIdCalibracaoDoHash(hash) {
   const m = String(hash || "").match(/^#calibracao\/(.+)$/);
   return m ? decodeURIComponent(m[1]) : null;
@@ -4960,14 +4991,20 @@ const CORES_DASHBOARD = {
 
 const IndicadoresModule = {
   components: { MesesMultiSelect },
-  setup() {
+  emits: ["abrir-instrumento"],
+  setup(props, { emit }) {
     const loading = ref(true);
     const erro = ref("");
     const preventivas = ref([]);
     const corretivas = ref([]);
     const todosEquipamentos = ref([]);
+    const calibracoes = ref([]);
     const areas = computed(() => unirAreas(todosEquipamentos.value));
     const meses = MESES_PT;
+
+    // Abas do módulo: métricas fabris (Preventiva/Corretiva, sempre existiu)
+    // e o novo Dashboard Metrológico & Calibração (RSG-7601-02).
+    const abaAtiva = ref("manutencao");
 
     const ANO_ATUAL_IND = new Date().getFullYear();
     const filtroAno = ref(ANO_ATUAL_IND);
@@ -4999,6 +5036,9 @@ const IndicadoresModule = {
           ),
           mesReferencia: parseInt(e.Mes_Referencia || e.mes_referencia || e.MesReferencia || e.mesReferencia, 10) || 1,
         }));
+        const rawCalibracoes = data.calibracoes || data.Calibracoes_Controle || data.calibracoesControle
+          || (data.data && (data.data.calibracoes || data.data.calibracoesControle)) || [];
+        calibracoes.value = (Array.isArray(rawCalibracoes) ? rawCalibracoes : []).map(normalizeCalibracao);
       } catch (err) {
         console.error(err);
         erro.value = "Não foi possível carregar os indicadores.";
@@ -5227,16 +5267,127 @@ const IndicadoresModule = {
       }).sort((a, b) => b.chamados - a.chamados);
     });
 
+    /* ========================================================================
+       ABA "INDICADORES DE CALIBRAÇÃO & SGQ" — Dashboard Metrológico
+       (RSG-7601-02). Lê os mesmos dados de Calibracoes_Controle já
+       carregados por `carregar()` acima; não dispara nenhuma requisição
+       adicional. O status de cada instrumento usa sempre
+       `statusInstrumentoCalibracao`, o mesmo motor do módulo Calibração &
+       Medição — nunca recalcula por conta própria, para as duas telas
+       jamais divergirem entre si.
+       ======================================================================== */
+    const calibracoesComStatus = computed(() =>
+      calibracoes.value.map(c => ({ ...c, status: statusInstrumentoCalibracao(c) }))
+    );
+
+    const kpiCalibracao = computed(() => {
+      const lista = calibracoesComStatus.value;
+      const total = lista.length;
+      const noPrazo = lista.filter(c => c.status.label === "No Prazo").length;
+      const atencao = lista.filter(c => c.status.label === "Atenção").length;
+      const emCalibracao = lista.filter(c => c.status.label === "Em Calibração").length;
+      const vencidos = lista.filter(c => c.status.label === "Vencido").length;
+
+      // Aderência às Checagens: só considera instrumentos com checagem
+      // semestral aplicável (isto é, que já têm um Vencimento_Checagem
+      // calculado) — "em dia" é aquele cujo vencimento ainda não passou.
+      const comChecagemAtiva = lista.filter(c => !!c.vencimentoChecagem);
+      const checagensEmDia = comChecagemAtiva.filter(c => {
+        const d = parseData(c.vencimentoChecagem);
+        return d && d.getTime() >= new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+      }).length;
+
+      return {
+        total, noPrazo, atencao, emCalibracao, vencidos,
+        conformidadeGeral: total ? Math.round((noPrazo / total) * 100) : null,
+        aderenciaChecagens: comChecagemAtiva.length ? Math.round((checagensEmDia / comChecagemAtiva.length) * 100) : null,
+      };
+    });
+
+    // ===== Gráfico: Previsão de Vencimentos Metrológicos (próximos 6 meses) =====
+    const dadosPrevisaoVencimentos = computed(() => {
+      const hoje = new Date();
+      const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+      const buckets = [{ label: "Vencidos", ano: null, mes: null }];
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+        const mesInfo = MESES_PT[d.getMonth()];
+        buckets.push({ label: mesInfo.l.slice(0, 3) + "/" + String(d.getFullYear()).slice(-2), ano: d.getFullYear(), mes: mesInfo.v });
+      }
+      const valores = buckets.map(() => 0);
+      calibracoes.value.forEach(c => {
+        const d = parseData(c.dataValidade);
+        if (!d) return;
+        if (d.getTime() < inicioHoje.getTime()) { valores[0]++; return; }
+        const idx = buckets.findIndex((b, i) => i > 0 && b.ano === d.getFullYear() && b.mes === d.getMonth() + 1);
+        if (idx !== -1) valores[idx]++;
+      });
+      return { labels: buckets.map(b => b.label), valores };
+    });
+
+    // ===== Gráfico: Instrumentos por Setor Fabril (donut) =====
+    const CORES_SETOR_CALIBRACAO = ["#0ea5e9", "#f59e0b", "#8b5cf6", "#10b981", "#ef4444", "#ec4899", "#14b8a6", "#64748b", "#f97316", "#6366f1"];
+    const dadosPorSetorCalibracao = computed(() => {
+      const contagem = {};
+      calibracoes.value.forEach(c => {
+        const chave = c.area || "Sem Setor";
+        contagem[chave] = (contagem[chave] || 0) + 1;
+      });
+      const ordenado = Object.entries(contagem).sort((a, b) => b[1] - a[1]);
+      return {
+        labels: ordenado.map(x => x[0]),
+        valores: ordenado.map(x => x[1]),
+        cores: ordenado.map((_, i) => CORES_SETOR_CALIBRACAO[i % CORES_SETOR_CALIBRACAO.length]),
+      };
+    });
+
+    // ===== Gráfico: Distribuição por Grandeza Metrológica (barras horizontais) =====
+    const ORDEM_GRANDEZA = ["Dimensional", "Elétrica", "Pressão", "Temperatura", "Massa", "Outros"];
+    const dadosPorGrandeza = computed(() => {
+      const contagem = Object.fromEntries(ORDEM_GRANDEZA.map(g => [g, 0]));
+      calibracoes.value.forEach(c => { contagem[classificarGrandezaMetrologica(c.equipamento)]++; });
+      const entradas = ORDEM_GRANDEZA.map(g => [g, contagem[g]]).filter(([, v]) => v > 0);
+      return {
+        labels: entradas.map(x => x[0]),
+        valores: entradas.map(x => x[1]),
+        cores: entradas.map(x => CORES_GRANDEZA[x[0]]),
+      };
+    });
+
+    // ===== Tabela: Ação Imediata & Auditoria =====
+    const PRIORIDADE_STATUS_CALIBRACAO = { "Vencido": 0, "Em Calibração": 1, "Atenção": 2 };
+    const linhasAcaoCalibracao = computed(() =>
+      calibracoesComStatus.value
+        .filter(c => c.status.label === "Vencido" || c.status.label === "Atenção" || c.status.label === "Em Calibração")
+        .sort((a, b) => {
+          const p = PRIORIDADE_STATUS_CALIBRACAO[a.status.label] - PRIORIDADE_STATUS_CALIBRACAO[b.status.label];
+          if (p !== 0) return p;
+          return (parseData(a.dataValidade) ? parseData(a.dataValidade).getTime() : Infinity)
+            - (parseData(b.dataValidade) ? parseData(b.dataValidade).getTime() : Infinity);
+        })
+    );
+
+    function verNoControle(c) {
+      emit("abrir-instrumento", c.id);
+    }
+
     // ===== Chart.js: criação/destruição dos 3 gráficos =====
     const canvasMensalRef = ref(null);
     const canvasTop5Ref = ref(null);
     const canvasPrioridadeRef = ref(null);
+    const canvasPrevisaoVencimentosRef = ref(null);
+    const canvasSetorCalibracaoRef = ref(null);
+    const canvasGrandezaRef = ref(null);
     let chartMensal = null, chartTop5 = null, chartPrioridade = null;
+    let chartPrevisaoVencimentos = null, chartSetorCalibracao = null, chartGrandeza = null;
 
     function destruirGraficos() {
       if (chartMensal) { chartMensal.destroy(); chartMensal = null; }
       if (chartTop5) { chartTop5.destroy(); chartTop5 = null; }
       if (chartPrioridade) { chartPrioridade.destroy(); chartPrioridade = null; }
+      if (chartPrevisaoVencimentos) { chartPrevisaoVencimentos.destroy(); chartPrevisaoVencimentos = null; }
+      if (chartSetorCalibracao) { chartSetorCalibracao.destroy(); chartSetorCalibracao = null; }
+      if (chartGrandeza) { chartGrandeza.destroy(); chartGrandeza = null; }
     }
 
     // Sempre destrói antes de recriar — evita sobreposição de canvas ao
@@ -5286,13 +5437,51 @@ const IndicadoresModule = {
           options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } } },
         });
       }
+
+      if (canvasPrevisaoVencimentosRef.value) {
+        const d = dadosPrevisaoVencimentos.value;
+        chartPrevisaoVencimentos = new Chart(canvasPrevisaoVencimentosRef.value, {
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Instrumentos", data: d.valores, backgroundColor: "#0ea5e9", borderRadius: 4 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          },
+        });
+      }
+
+      if (canvasSetorCalibracaoRef.value) {
+        const d = dadosPorSetorCalibracao.value;
+        chartSetorCalibracao = new Chart(canvasSetorCalibracaoRef.value, {
+          type: "doughnut",
+          data: { labels: d.labels, datasets: [{ data: d.valores, backgroundColor: d.cores }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 12 } } } },
+        });
+      }
+
+      if (canvasGrandezaRef.value) {
+        const d = dadosPorGrandeza.value;
+        chartGrandeza = new Chart(canvasGrandezaRef.value, {
+          type: "bar",
+          data: { labels: d.labels, datasets: [{ label: "Instrumentos", data: d.valores, backgroundColor: d.cores, borderRadius: 4 }] },
+          options: {
+            indexAxis: "y", responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+          },
+        });
+      }
     }
 
     // Qualquer mudança nos dados dos gráficos (filtros ou nova carga de
-    // dados) recria os 3 gráficos automaticamente.
-    watch([dadosGraficoMensal, dadosTop5Equipamentos, dadosPrioridade], () => {
-      nextTick(renderGraficos);
-    });
+    // dados) recria os gráficos automaticamente; a troca de aba também
+    // recria (o Chart.js não desenha em canvas ainda fora do DOM, então os
+    // gráficos da aba recém-aberta só existem depois desse redraw).
+    watch(
+      [dadosGraficoMensal, dadosTop5Equipamentos, dadosPrioridade, dadosPrevisaoVencimentos, dadosPorSetorCalibracao, dadosPorGrandeza, abaAtiva],
+      () => nextTick(renderGraficos)
+    );
 
     function formatarHoras(h) {
       if (h === null || h === undefined || isNaN(h)) return "0h";
@@ -5314,15 +5503,30 @@ const IndicadoresModule = {
     onUnmounted(destruirGraficos);
 
     return {
-      loading, erro, carregar, areas, meses,
+      loading, erro, carregar, areas, meses, abaAtiva,
       filtroAno, filtroMeses, filtroArea, anosDisponiveis,
       taxaConformidade, aderenciaPlano, mttr, mtbf,
       canvasMensalRef, canvasTop5Ref, canvasPrioridadeRef,
+      canvasPrevisaoVencimentosRef, canvasSetorCalibracaoRef, canvasGrandezaRef,
       linhasDisponibilidade, formatarHoras, formatarPercentual, formatarMtbf,
+      kpiCalibracao, linhasAcaoCalibracao, verNoControle, nomeInstrumentoModelo,
+      formatarDataCalibracao: (v) => { const d = parseDataHoraLocal(v); return d ? d.toLocaleDateString("pt-BR") : "-"; },
     };
   },
   template: `
   <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-1.5 shadow-sm flex gap-1.5">
+      <button @click="abaAtiva = 'manutencao'" class="btn-tap flex-1 flex items-center justify-center gap-1.5 rounded-lg text-sm font-semibold py-2.5 transition-colors"
+        :class="abaAtiva === 'manutencao' ? 'bg-sky-600 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100'">
+        ⚙️ Métricas de Manutenção Fabril
+      </button>
+      <button @click="abaAtiva = 'calibracao'" class="btn-tap flex-1 flex items-center justify-center gap-1.5 rounded-lg text-sm font-semibold py-2.5 transition-colors"
+        :class="abaAtiva === 'calibracao' ? 'bg-sky-600 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100'">
+        📐 Indicadores de Calibração & SGQ
+      </button>
+    </div>
+
+    <template v-if="abaAtiva === 'manutencao'">
     <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <select v-model="filtroAno" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
@@ -5444,6 +5648,105 @@ const IndicadoresModule = {
           </div>
         </div>
       </div>
+    </template>
+    </template>
+
+    <template v-if="abaAtiva === 'calibracao'">
+    <div v-if="loading" class="flex justify-center py-12 text-slate-400">
+      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
+    </div>
+    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
+    <template v-else>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">🟢 Conformidade Geral</p>
+          <p class="text-3xl font-extrabold text-emerald-600 mt-1">{{ formatarPercentual(kpiCalibracao.conformidadeGeral) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">No Prazo / Total de instrumentos</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">⏱️ Aderência às Checagens</p>
+          <p class="text-3xl font-extrabold text-indigo-600 mt-1">{{ formatarPercentual(kpiCalibracao.aderenciaChecagens) }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Checagens em dia / com checagem ativa</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">🟡 Vencendo em 45 dias</p>
+          <p class="text-3xl font-extrabold text-amber-500 mt-1">{{ kpiCalibracao.atencao }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Requerem agendamento de laboratório</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">🟠 Em Calibração Externa</p>
+          <p class="text-3xl font-extrabold text-orange-500 mt-1">{{ kpiCalibracao.emCalibracao }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Encaminhados ao laboratório</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p class="text-xs text-slate-400 font-semibold uppercase">🔴 Críticos / Vencidos</p>
+          <p class="text-3xl font-extrabold text-red-600 mt-1">{{ kpiCalibracao.vencidos }}</p>
+          <p class="text-[11px] text-slate-400 mt-1">Fora do prazo de calibração</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
+          <h3 class="font-bold text-slate-700 mb-3">Previsão de Vencimentos Metrológicos</h3>
+          <div style="height: 260px">
+            <canvas ref="canvasPrevisaoVencimentosRef"></canvas>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Instrumentos por Setor Fabril</h3>
+          <div style="height: 240px">
+            <canvas ref="canvasSetorCalibracaoRef"></canvas>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 class="font-bold text-slate-700 mb-3">Distribuição por Grandeza Metrológica</h3>
+          <div style="height: 240px">
+            <canvas ref="canvasGrandezaRef"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-bold text-slate-700 mb-3">Ação Imediata & Auditoria</h3>
+        <div v-if="linhasAcaoCalibracao.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
+          Nenhum instrumento demanda ação imediata — tudo dentro do prazo.
+        </div>
+        <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table class="text-xs w-full border-collapse">
+            <thead>
+              <tr class="bg-slate-800 text-white">
+                <th class="px-3 py-2 text-left whitespace-nowrap">TAG</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Instrumento / Modelo</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Setor</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Responsável</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Vencimento Calibração</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Vencimento Checagem</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Status</th>
+                <th class="px-3 py-2 text-left whitespace-nowrap">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in linhasAcaoCalibracao" :key="c.id" class="border-t border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2 font-mono font-bold text-slate-700 whitespace-nowrap">{{ c.tag || "-" }}</td>
+                <td class="px-3 py-2 min-w-[140px] font-semibold text-slate-800">{{ nomeInstrumentoModelo(c) }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.area || "-" }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.responsavel || "-" }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ formatarDataCalibracao(c.dataValidade) }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ c.vencimentoChecagem ? formatarDataCalibracao(c.vencimentoChecagem) : "-" }}</td>
+                <td class="px-3 py-2">
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap" :class="c.status.cls">{{ c.status.cor }} {{ c.status.label }}</span>
+                </td>
+                <td class="px-3 py-2">
+                  <button @click="verNoControle(c)" class="btn-tap bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap">
+                    Ver no Controle
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
     </template>
   </div>`
 };
@@ -5949,18 +6252,6 @@ const CalibracaoModule = {
     function formatarData(v) {
       const d = parseDataHoraLocal(v);
       return d ? d.toLocaleDateString("pt-BR") : "-";
-    }
-
-    // Colunas compostas da tabela ("Instrumento / Modelo" e "Capacidade &
-    // Tolerância"): mesmas regras de fallback usadas para diagnosticar o
-    // desalinhamento de nomes de coluna da planilha, agora aplicadas direto
-    // na exibição para nunca deixar a célula em branco.
-    function nomeInstrumentoModelo(c) {
-      return [c.equipamento, c.modelo].filter(Boolean).join(" - ") || "-";
-    }
-    function capacidadeTolerancia(c) {
-      if (c.capacidade && c.tolerancia) return `${c.capacidade} | ${c.tolerancia}`;
-      return c.capacidade || c.tolerancia || "-";
     }
 
     return {
@@ -6785,6 +7076,15 @@ const App = {
       pushToast("Sessão encerrada.", "info");
     }
 
+    // Navegação interna vinda da tabela "Ação Imediata & Auditoria" do
+    // Dashboard Metrológico (Indicadores ▸ Calibração & SGQ): reaproveita o
+    // mesmo mecanismo do deep link do QR Code para abrir a ficha completa do
+    // instrumento direto na Calibração & Medição, sem precisar de URL/hash.
+    function abrirInstrumentoCalibracao(id) {
+      deepLinkCalibracaoId.value = id;
+      currentView.value = "calibracao";
+    }
+
     function irParaHome() {
       erroRenderizacao.value = null;
       currentView.value = "home";
@@ -6830,7 +7130,7 @@ const App = {
     return {
       user, currentView, handleLoginSuccess, logout, irParaHome, navigate, currentTitle, cargoBadgeClass,
       erroRenderizacao, tentarNovamenteRenderizacao, perfilAberto, abrirPerfil, fecharPerfil,
-      deepLinkCalibracaoId,
+      deepLinkCalibracaoId, abrirInstrumentoCalibracao,
     };
   },
   template: `
@@ -6902,7 +7202,7 @@ const App = {
           <home-hub v-if="currentView === 'home'" :user="user" @navigate="navigate" @abrir-perfil="abrirPerfil" key="home"></home-hub>
           <preventiva-module v-else-if="currentView === 'preventiva'" :user="user" @go-home="irParaHome" key="prev"></preventiva-module>
           <corretiva-module v-else-if="currentView === 'corretiva'" :user="user" key="corr"></corretiva-module>
-          <indicadores-module v-else-if="currentView === 'indicadores'" key="ind"></indicadores-module>
+          <indicadores-module v-else-if="currentView === 'indicadores'" @abrir-instrumento="abrirInstrumentoCalibracao" key="ind"></indicadores-module>
           <calibracao-module v-else-if="currentView === 'calibracao'" :user="user" :abrir-id="deepLinkCalibracaoId"
             @abrir-id-consumido="deepLinkCalibracaoId = null" key="calib"></calibracao-module>
           <gestao-ativos-module v-else-if="currentView === 'ativos'" key="ativos"></gestao-ativos-module>
