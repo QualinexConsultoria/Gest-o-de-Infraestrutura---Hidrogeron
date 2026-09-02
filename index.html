@@ -190,7 +190,7 @@ async function closeCorretivaApi(idChamado, resolucao, tecnico, extra) {
     idChamado: idChamado,
     resolucao: resolucao,
     tecnico: tecnico,
-    dataFechamento: new Date().toISOString().replace("T", " ").substring(0, 16),
+    dataFechamento: formatarDataHoraLocalISO(),
     ...(extra || {}),
     _t: Date.now(),
   });
@@ -320,10 +320,22 @@ function extractPreventivas(data) {
   return (Array.isArray(raw) ? raw : []).map(normalizePreventivaLog);
 }
 
+// Linhas totalmente em branco (ou sem um ID real da planilha) viravam
+// "cards fantasma" na lista: sem ID_Chamado, normalizeCorretivaChamado cai
+// no fallback uid() e gera um card com um ID sintético e todo o resto
+// vazio. Filtra na fonte, antes de normalizar, exigindo um ID real da
+// própria planilha e pelo menos equipamento ou descrição preenchidos.
+function chamadoCorretivaValido(c) {
+  const id = (c.ID_Chamado || c.id_chamado || c.ID || c.id || "").toString().trim();
+  const eq = (c.Equipamento || c.equipamento || "").toString().trim();
+  const prob = (c.Descricao_Problema || c.descricao_problema || c.Descricao || c.descricao || "").toString().trim();
+  return id !== "" && (eq !== "" || prob !== "");
+}
+
 function extractCorretivas(data) {
   const raw = (data && (data.chamados || data.Chamados || data.corretivas || data.Corretivas
     || (data.data && (data.data.chamados || data.data.corretivas)))) || [];
-  return (Array.isArray(raw) ? raw : []).map(normalizeCorretivaChamado);
+  return (Array.isArray(raw) ? raw : []).filter(chamadoCorretivaValido).map(normalizeCorretivaChamado);
 }
 
 function isStatusChamadoAberto(status) {
@@ -1104,6 +1116,19 @@ function formatarDataISO(d) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+// Mesma ideia de formatarDataISO, mas com hora:minuto — usado para gravar
+// Data/Hora de Abertura/Fechamento de chamados Corretivos. new Date().
+// toISOString() sempre captura o horário em UTC; em fusos negativos (ex.:
+// Brasília, GMT-3) isso grava um horário adiantado em relação ao relógio
+// local do navegador, que depois é reexibido como se já fosse local —
+// deslocando o "Aberto DD/MM, HH:mm" mostrado nos cards.
+function formatarDataHoraLocalISO(d) {
+  const data = d || new Date();
+  const hh = String(data.getHours()).padStart(2, "0");
+  const min = String(data.getMinutes()).padStart(2, "0");
+  return `${formatarDataISO(data)} ${hh}:${min}`;
 }
 
 // Checagem Semestral: vencimento = Data de Checagem + 180 dias corridos.
@@ -3285,11 +3310,188 @@ const LaudoCorretivaModal = {
 };
 
 /* ==========================================================================
+   ORDEM DE SERVIÇO DE ABERTURA — RSG-6302-01 (emitida na hora, para o
+   técnico levar ao chão de fábrica; os campos de diagnóstico/peças/
+   assinaturas ficam em branco para preenchimento manual — o registro
+   digital deles acontece depois, no encerramento, no laudo RSG-6302-02).
+   ========================================================================== */
+const RSG_CODIGO_OS_CORRETIVA = "RSG-6302-01";
+const RSG_TITULO_OS_CORRETIVA = "RSG-6302-01 - Ordem de Serviço de Manutenção Corretiva";
+
+const OrdemServicoModal = {
+  props: { chamado: Object },
+  emits: ["fechar"],
+  setup(props) {
+    const exportandoPdf = ref(false);
+
+    function formatarDataHora(v) {
+      if (!v) return "-";
+      const d = parseDataHoraLocal(v);
+      if (!d || isNaN(d.getTime())) return String(v);
+      return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    const nomeArquivo = computed(() => {
+      const c = props.chamado || {};
+      const dataParte = String(c.data || "").split(" ")[0] || formatarDataISO(new Date());
+      const idParte = sanitizarNomeArquivo(c.id || "chamado");
+      return `${RSG_CODIGO_OS_CORRETIVA}_${idParte}_${dataParte}.pdf`;
+    });
+
+    function imprimir() {
+      window.print();
+    }
+
+    function exportarPDF() {
+      if (typeof window.jspdf === "undefined" || typeof window.html2canvas === "undefined") {
+        pushToast("Biblioteca de exportação (PDF) não carregou. Verifique sua conexão.", "error");
+        return;
+      }
+      const elemento = document.getElementById("laudo-imprimivel");
+      if (!elemento) return;
+      exportandoPdf.value = true;
+      try {
+        const doc = new window.jspdf.jsPDF("p", "pt", "a4");
+        doc.html(elemento, {
+          margin: [24, 24, 24, 24],
+          autoPaging: "text",
+          html2canvas: { scale: 0.72, useCORS: true, backgroundColor: "#ffffff" },
+          width: 547,
+          windowWidth: elemento.scrollWidth || 780,
+          callback: (docFinal) => {
+            docFinal.save(nomeArquivo.value);
+            exportandoPdf.value = false;
+          },
+        });
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao gerar o PDF da ordem de serviço.", "error");
+        exportandoPdf.value = false;
+      }
+    }
+
+    return {
+      exportandoPdf, formatarDataHora, nomeArquivo, imprimir, exportarPDF,
+      RSG_CODIGO_OS_CORRETIVA, RSG_TITULO_OS_CORRETIVA,
+    };
+  },
+  template: `
+  <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4">
+    <div class="bg-white w-full sm:max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[95vh] overflow-y-auto">
+      <div class="no-print sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
+        <h3 class="font-bold text-slate-800">Ordem de Serviço (Abertura)</h3>
+        <button @click="$emit('fechar')" class="btn-tap text-slate-400 hover:text-slate-600 text-xl leading-none px-2">✕</button>
+      </div>
+
+      <div id="laudo-imprimivel" class="p-5 space-y-4" v-if="chamado">
+        <!-- Cabeçalho documental -->
+        <div class="border-b-2 border-slate-800 pb-3">
+          <p class="text-xs font-bold text-orange-700 uppercase tracking-wide">Hidrogeron - Sistema de Manutenção</p>
+          <h2 class="text-lg font-extrabold text-slate-900 mt-0.5">{{ RSG_TITULO_OS_CORRETIVA }}</h2>
+          <div class="grid grid-cols-2 gap-2 mt-2 text-xs text-slate-500">
+            <p><span class="font-semibold text-slate-700">Número da OS:</span> #{{ chamado.id }}</p>
+            <p><span class="font-semibold text-slate-700">Prioridade:</span> {{ chamado.prioridade || '-' }}</p>
+            <p><span class="font-semibold text-slate-700">Data/Hora Abertura:</span> {{ formatarDataHora(chamado.data) }}</p>
+            <p><span class="font-semibold text-slate-700">Solicitante:</span> {{ chamado.solicitante || '-' }}</p>
+          </div>
+        </div>
+
+        <!-- Dados do Ativo -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Ativo / Equipamento</h4>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+            <p class="col-span-2"><span class="text-slate-400">Máquina/Equipamento:</span> <span class="font-medium text-slate-800">{{ chamado.equipamento || '-' }}</span></p>
+            <p><span class="text-slate-400">Setor/Área Fabril:</span> <span class="font-medium text-slate-800">{{ chamado.area || '-' }}</span></p>
+            <p><span class="text-slate-400">Status Inicial:</span> <span class="font-medium text-slate-800">{{ chamado.status || 'Aberto' }}</span></p>
+          </div>
+        </div>
+
+        <!-- Descrição do Defeito -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Descrição do Defeito / Sintoma</h4>
+          <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 text-sm">
+            <p class="text-slate-700">{{ chamado.descricao || '-' }}</p>
+          </div>
+        </div>
+
+        <!-- Campos em branco para o técnico no chão de fábrica -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Preenchimento do Técnico</h4>
+
+          <p class="text-xs font-semibold text-slate-600 mt-2 mb-1">Diagnóstico Técnico / Causa Encontrada:</p>
+          <div class="border-b border-slate-400 h-7"></div>
+          <div class="border-b border-slate-400 h-7"></div>
+          <div class="border-b border-slate-400 h-7"></div>
+
+          <p class="text-xs font-semibold text-slate-600 mt-4 mb-1">Peças / Componentes Substituídos:</p>
+          <table class="w-full text-xs border border-slate-300 border-collapse">
+            <thead>
+              <tr class="bg-slate-100">
+                <th class="border border-slate-300 px-2 py-1.5 text-left w-1/4">Código</th>
+                <th class="border border-slate-300 px-2 py-1.5 text-left">Descrição</th>
+                <th class="border border-slate-300 px-2 py-1.5 text-left w-1/6">Qtd.</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="n in 4" :key="n">
+                <td class="border border-slate-300 px-2 h-7">&nbsp;</td>
+                <td class="border border-slate-300 px-2 h-7">&nbsp;</td>
+                <td class="border border-slate-300 px-2 h-7">&nbsp;</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="grid grid-cols-2 gap-4 mt-4 text-xs text-slate-600">
+            <div>
+              <p class="font-semibold mb-1">Data/Horário de Início:</p>
+              <div class="border-b border-slate-400 h-7"></div>
+            </div>
+            <div>
+              <p class="font-semibold mb-1">Data/Horário de Término:</p>
+              <div class="border-b border-slate-400 h-7"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Assinaturas -->
+        <div class="pt-4">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Validação</h4>
+          <div class="grid grid-cols-2 gap-6 text-xs text-slate-500">
+            <div>
+              <div class="border-b border-slate-400 h-10"></div>
+              <p class="mt-1 font-semibold text-slate-700">Assinatura do Técnico Responsável</p>
+            </div>
+            <div>
+              <div class="border-b border-slate-400 h-10"></div>
+              <p class="mt-1 font-semibold text-slate-700">Assinatura do Solicitante / Líder de Produção</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="no-print px-5 pb-5 pt-2 grid grid-cols-2 gap-2 sticky bottom-0 bg-white border-t border-slate-200 mt-2">
+        <button @click="imprimir" class="btn-tap flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          🖨️ Imprimir
+        </button>
+        <button @click="exportarPDF" :disabled="exportandoPdf"
+          class="btn-tap flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm">
+          <span v-if="exportandoPdf" class="spinner"></span>
+          <span>{{ exportandoPdf ? "Gerando..." : "📄 Exportar PDF" }}</span>
+        </button>
+        <button @click="$emit('fechar')" class="btn-tap col-span-2 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+          Fechar
+        </button>
+      </div>
+    </div>
+  </div>`
+};
+
+/* ==========================================================================
    MÓDULO CORRETIVA
    ========================================================================== */
 const CorretivaModule = {
   props: { user: Object },
-  components: { AssinaturaCanvas, LaudoCorretivaModal, AlertaWhatsAppModal },
+  components: { AssinaturaCanvas, LaudoCorretivaModal, OrdemServicoModal, AlertaWhatsAppModal },
   setup(props) {
     const prioridades = PRIORIDADES;
     const form = reactive({
@@ -3304,6 +3506,33 @@ const CorretivaModule = {
     function fecharAlertaWhatsApp() {
       alertaWhatsAppAberto.value = false;
     }
+
+    // Modal de confirmação exibido logo após a abertura do chamado, com
+    // atalho para a Ordem de Serviço em branco (RSG-6302-01) — o alerta de
+    // WhatsApp acima só é disparado depois que este for dispensado.
+    const confirmacaoAberturaAberta = ref(false);
+    const confirmacaoAberturaChamado = ref(null);
+    const osImpressaoAberta = ref(false);
+    const osImpressaoChamado = ref(null);
+    function abrirOSImpressao(chamado) {
+      osImpressaoChamado.value = chamado;
+      osImpressaoAberta.value = true;
+    }
+    function fecharOSImpressao() {
+      osImpressaoAberta.value = false;
+      osImpressaoChamado.value = null;
+    }
+    function fecharConfirmacaoAbertura() {
+      confirmacaoAberturaAberta.value = false;
+      confirmacaoAberturaChamado.value = null;
+      alertaWhatsAppAberto.value = true;
+    }
+    function imprimirOSDaConfirmacao() {
+      const chamado = confirmacaoAberturaChamado.value;
+      fecharConfirmacaoAbertura();
+      abrirOSImpressao(chamado);
+    }
+
     const chamados = ref([]);
     const chamadosEncerrados = ref([]);
     const loadingChamados = ref(true);
@@ -3487,7 +3716,7 @@ const CorretivaModule = {
       }
       enviando.value = true;
       try {
-        const dataAbertura = new Date().toISOString().replace("T", " ").substring(0, 16);
+        const dataAbertura = formatarDataHoraLocalISO();
         const payload = {
           area: form.area,
           equipamento: form.equipamento.trim(),
@@ -3520,7 +3749,7 @@ const CorretivaModule = {
         form.descricao = "";
         form.prioridade = "Média";
 
-        chamados.value.unshift({
+        const novoChamado = {
           id: idChamado,
           area: payload.area,
           equipamento: payload.equipamento,
@@ -3530,7 +3759,8 @@ const CorretivaModule = {
           status: "Aberto",
           data: dataAbertura,
           anexos,
-        });
+        };
+        chamados.value.unshift(novoChamado);
 
         anexosAbertura.value = [];
         pushToast("Chamado aberto com sucesso!", "success");
@@ -3543,7 +3773,11 @@ const CorretivaModule = {
           descricao: payload.descricaoProblema,
           inspetor: payload.solicitante,
         };
-        alertaWhatsAppAberto.value = true;
+
+        // Modal de confirmação com atalho para a Ordem de Serviço (RSG-6302-01);
+        // o alerta de WhatsApp só é disparado depois que este for dispensado.
+        confirmacaoAberturaChamado.value = novoChamado;
+        confirmacaoAberturaAberta.value = true;
       } catch (err) {
         console.error(err);
         pushToast("Erro ao abrir chamado. Tente novamente.", "error");
@@ -3659,7 +3893,7 @@ const CorretivaModule = {
         // Retorno confirmado pelo servidor: atualiza o objeto do chamado em
         // memória (estado otimista) e re-renderiza a tela na hora.
         const dataFechamento = (resp && (resp.dataFechamento || resp.dataConclusao))
-          || new Date().toISOString().replace("T", " ").substring(0, 16);
+          || formatarDataHoraLocalISO();
         chamado.status = "Fechado";
         chamado.dataConclusao = dataFechamento;
         chamado.resolucao = resolucaoCompleta;
@@ -3883,6 +4117,8 @@ const CorretivaModule = {
     return {
       areas, prioridades, form, enviando, abrirChamado,
       alertaWhatsAppAberto, alertaWhatsAppDados, fecharAlertaWhatsApp,
+      confirmacaoAberturaAberta, confirmacaoAberturaChamado, fecharConfirmacaoAbertura, imprimirOSDaConfirmacao,
+      osImpressaoAberta, osImpressaoChamado, abrirOSImpressao, fecharOSImpressao,
       chamados, chamadosEncerrados, loadingChamados, erroChamados, aba, corPrioridade, formatarData, carregarChamados,
       chamadosFiltrados, chamadosEncerradosFiltrados,
       filtroBuscaCorretiva, filtroAreaCorretiva, filtroStatusCorretiva, filtroPrioridadeCorretiva, limparFiltrosCorretiva,
@@ -4057,6 +4293,10 @@ const CorretivaModule = {
             <button @click="abrirModalEncerramento(c)"
               class="btn-tap w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-sm">
               ⚙️ Atender / Encerrar Chamado
+            </button>
+            <button @click="abrirOSImpressao(c)"
+              class="btn-tap w-full flex items-center justify-center gap-2 bg-white hover:bg-slate-50 text-slate-700 font-semibold py-2 rounded-lg text-sm border border-slate-300 mt-1.5">
+              🖨️ Imprimir OS
             </button>
             <div v-if="souAdmin" class="flex gap-1.5 mt-1.5">
               <button @click="abrirEdicaoChamado(c)"
@@ -4300,6 +4540,24 @@ const CorretivaModule = {
     </laudo-corretiva-modal>
 
     <alerta-whats-app-modal v-if="alertaWhatsAppAberto" :dados="alertaWhatsAppDados" @fechar="fecharAlertaWhatsApp"></alerta-whats-app-modal>
+
+    <!-- MODAL: confirmação de abertura de chamado, com atalho para a OS -->
+    <div v-if="confirmacaoAberturaAberta" class="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="fecharConfirmacaoAbertura">
+      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4 text-center">
+        <p class="text-4xl">✅</p>
+        <h3 class="font-bold text-slate-800 text-lg">Chamado #{{ confirmacaoAberturaChamado && confirmacaoAberturaChamado.id }} aberto com sucesso!</h3>
+        <div class="space-y-2 pt-1">
+          <button @click="imprimirOSDaConfirmacao" class="btn-tap w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2.5 rounded-lg text-sm">
+            🖨️ Imprimir Ordem de Serviço (PDF)
+          </button>
+          <button @click="fecharConfirmacaoAbertura" class="btn-tap w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">
+            Concluir / Voltar à Lista
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <ordem-servico-modal v-if="osImpressaoAberta" :chamado="osImpressaoChamado" @fechar="fecharOSImpressao"></ordem-servico-modal>
 
     <!-- MODAL: confirmação de exclusão (Gestão Administrativa) -->
     <div v-if="excluirChamadoAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusaoChamado">
