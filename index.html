@@ -7524,7 +7524,15 @@ const CalibracaoModule = {
       salvando.value = true;
       try {
         const id = editandoId.value || "CAL-" + Date.now();
-        await saveCalibracaoApi({ id, ...form });
+        // TAG (maiúsculo) é enviado junto com "tag" porque o identificador
+        // real usado pelo Apps Script para localizar a linha na planilha é a
+        // própria TAG do instrumento (não há coluna de ID estável) — sem
+        // esse alias, a chamada podia não encontrar a linha a atualizar e
+        // retornar erro, que a ausência da checagem abaixo escondia: a tela
+        // "salvava" otimisticamente e revertia sozinha ao recarregar.
+        const tagValor = (form.tag || "").toString().trim();
+        const resp = await saveCalibracaoApi({ id, ...form, tag: tagValor, TAG: tagValor });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
         const atualizado = normalizeCalibracao({
           ID: id, TAG: form.tag, Instrumento: form.equipamento, Modelo: form.modelo,
           Capacidade: form.capacidade, Tolerancia: form.tolerancia, Numero_Serie: form.numeroSerie,
@@ -7564,8 +7572,9 @@ const CalibracaoModule = {
       try {
         const hoje = formatarDataISO(new Date());
         const vencimento = calcularVencimentoChecagem(hoje);
-        await saveCalibracaoApi({
-          id: item.id, tag: item.tag, equipamento: item.equipamento, modelo: item.modelo,
+        const tagValor = (item.TAG || item.tag || item.codigo || "").toString().trim();
+        const resp = await saveCalibracaoApi({
+          id: item.id, tag: tagValor, TAG: tagValor, equipamento: item.equipamento, modelo: item.modelo,
           capacidade: item.capacidade, tolerancia: item.tolerancia, numeroSerie: item.numeroSerie,
           area: item.area, responsavel: item.responsavel, certificadoRbc: item.certificadoRbc,
           laboratorio: item.laboratorio, dataCalibracao: item.dataCalibracao, dataValidade: item.dataValidade,
@@ -7573,6 +7582,7 @@ const CalibracaoModule = {
           dataEnvioLaboratorio: item.dataEnvioLaboratorio, previsaoRetorno: item.previsaoRetorno,
           dataChecagem: hoje, vencimentoChecagem: vencimento, operadorChecagem: operador,
         });
+        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao registrar a checagem.");
         const idx = lista.value.findIndex(c => c.id === item.id);
         if (idx !== -1) lista.value[idx] = { ...lista.value[idx], dataChecagem: hoje, vencimentoChecagem: vencimento };
         pushToast("Checagem semestral registrada com sucesso.", "success");
