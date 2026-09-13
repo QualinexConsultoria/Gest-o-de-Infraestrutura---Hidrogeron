@@ -1,0 +1,7 @@
+/* css/cores.css — Hidrogeron
+   Os poucos valores de cor que vivem fora das classes utilitárias do
+   Tailwind (que cobrem o resto de toda a paleta da aplicação, direto nos
+   templates dos componentes Vue). Carregado depois de layout.css. */
+
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.spinner { border-top-color: #fff; }
