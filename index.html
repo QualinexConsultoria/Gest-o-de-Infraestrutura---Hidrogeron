@@ -7526,12 +7526,29 @@ const CalibracaoModule = {
         const id = editandoId.value || "CAL-" + Date.now();
         // TAG (maiúsculo) é enviado junto com "tag" porque o identificador
         // real usado pelo Apps Script para localizar a linha na planilha é a
-        // própria TAG do instrumento (não há coluna de ID estável) — sem
-        // esse alias, a chamada podia não encontrar a linha a atualizar e
-        // retornar erro, que a ausência da checagem abaixo escondia: a tela
-        // "salvava" otimisticamente e revertia sozinha ao recarregar.
-        const tagValor = (form.tag || "").toString().trim();
-        const resp = await saveCalibracaoApi({ id, ...form, tag: tagValor, TAG: tagValor });
+        // própria TAG do instrumento (não há coluna de ID estável).
+        const t = v => (v ?? "").toString().trim();
+        const tagValor = t(form.tag);
+        // Os nomes internos do formulário (equipamento, area, tolerancia,
+        // responsavel, certificadoRbc, laboratorio, urlCertificado,
+        // dataValidade) nunca bateram com os parâmetros que o Apps Script
+        // realmente lê (descricao, setor, criterio, operador, certificadoRBC,
+        // obsChecagem, linkLaudoPDF, vencimentoCalibracao) — essa era a causa
+        // raiz real do "salva e reverte sozinho": a checagem de erro abaixo
+        // não pegava porque o backend confirmava sucesso normalmente
+        // (encontrava a linha pela TAG), só que gravava as colunas certas
+        // com valores vazios/indefinidos por não reconhecer os parâmetros.
+        const statusCalculado = statusValidadeCalibracao(form.dataValidade).label;
+        const resp = await saveCalibracaoApi({
+          id, tag: tagValor, TAG: tagValor,
+          descricao: t(form.equipamento), marcaModelo: t(form.modelo), capacidade: t(form.capacidade),
+          criterio: t(form.tolerancia), numeroSerie: t(form.numeroSerie), setor: t(form.area),
+          operador: t(form.responsavel), certificadoRBC: t(form.certificadoRbc), obsChecagem: t(form.laboratorio),
+          linkLaudoPDF: t(form.urlCertificado), dataCalibracao: form.dataCalibracao,
+          vencimentoCalibracao: form.dataValidade, status: statusCalculado,
+          emCalibracao: form.emCalibracao, dataEnvioLaboratorio: form.dataEnvioLaboratorio,
+          previsaoRetorno: form.previsaoRetorno, dataChecagem: form.dataChecagem,
+        });
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
         const atualizado = normalizeCalibracao({
           ID: id, TAG: form.tag, Instrumento: form.equipamento, Modelo: form.modelo,
@@ -7541,6 +7558,10 @@ const CalibracaoModule = {
           URL_Certificado: form.urlCertificado, Em_Calibracao: form.emCalibracao,
           Data_Envio_Laboratorio: form.dataEnvioLaboratorio, Previsao_Retorno: form.previsaoRetorno,
           Data_Checagem: form.dataChecagem,
+          // Sem isso, o objeto otimista sempre caía no default de
+          // normalizeCalibracao ("Prazo - Mais de 45 dias"), piscando um
+          // status errado no badge até o próximo carregar() corrigir.
+          Status: statusCalculado,
         });
         const idx = lista.value.findIndex(c => c.id === id);
         if (idx === -1) lista.value.unshift(atualizado);
@@ -7573,13 +7594,16 @@ const CalibracaoModule = {
         const hoje = formatarDataISO(new Date());
         const vencimento = calcularVencimentoChecagem(hoje);
         const tagValor = (item.TAG || item.tag || item.codigo || "").toString().trim();
+        // Mesmos nomes de parâmetro corrigidos de salvar() — ver comentário lá.
         const resp = await saveCalibracaoApi({
-          id: item.id, tag: tagValor, TAG: tagValor, equipamento: item.equipamento, modelo: item.modelo,
-          capacidade: item.capacidade, tolerancia: item.tolerancia, numeroSerie: item.numeroSerie,
-          area: item.area, responsavel: item.responsavel, certificadoRbc: item.certificadoRbc,
-          laboratorio: item.laboratorio, dataCalibracao: item.dataCalibracao, dataValidade: item.dataValidade,
-          urlCertificado: item.urlCertificado, emCalibracao: item.emCalibracao,
-          dataEnvioLaboratorio: item.dataEnvioLaboratorio, previsaoRetorno: item.previsaoRetorno,
+          id: item.id, tag: tagValor, TAG: tagValor,
+          descricao: item.equipamento, marcaModelo: item.modelo, capacidade: item.capacidade,
+          criterio: item.tolerancia, numeroSerie: item.numeroSerie, setor: item.area,
+          operador: item.responsavel, certificadoRBC: item.certificadoRbc, obsChecagem: item.laboratorio,
+          linkLaudoPDF: item.urlCertificado, dataCalibracao: item.dataCalibracao,
+          vencimentoCalibracao: item.dataValidade, status: statusValidadeCalibracao(item.dataValidade).label,
+          emCalibracao: item.emCalibracao, dataEnvioLaboratorio: item.dataEnvioLaboratorio,
+          previsaoRetorno: item.previsaoRetorno,
           dataChecagem: hoje, vencimentoChecagem: vencimento, operadorChecagem: operador,
         });
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao registrar a checagem.");
