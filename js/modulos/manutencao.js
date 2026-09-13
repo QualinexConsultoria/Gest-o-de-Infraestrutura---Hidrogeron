@@ -1481,6 +1481,7 @@ const PreventivaModule = {
     }
 
     onMounted(carregarDados);
+    onMounted(() => carregarCadastrosMestres());
 
     return {
       areas, meses, periodicidadesCanonicas: PERIODICIDADES_ORDEM, view, areaSelecionada, equipamentoSelecionado,
@@ -2980,6 +2981,7 @@ const CorretivaModule = {
     });
 
     onMounted(carregarChamados);
+    onMounted(() => carregarCadastrosMestres());
 
     return {
       areas, prioridades, form, enviando, abrirChamado,

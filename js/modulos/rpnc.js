@@ -526,6 +526,13 @@ const RncModule = {
       }
     }
     onMounted(carregar);
+    onMounted(() => carregarCadastrosMestres());
+
+    // Sugestões (datalist) de Setor/Departamento vindas da Central de
+    // Cadastros Mestres — mantém <input> de texto livre (não <select>) para
+    // não esconder valores já salvos que não batam com nenhum setor
+    // cadastrado (o campo sempre foi texto livre neste módulo).
+    const sugestoesSetor = computed(() => unirAreas([]));
 
     const listaComStatus = computed(() =>
       lista.value.map(r => ({ ...r, status: statusRnc(r), prejuizo: prejuizoRnc(r) }))
@@ -720,7 +727,7 @@ const RncModule = {
       verificarReincidencia, aplicarCausaSugerida, prejuizoCalculado,
       laudoAberto, rncLaudo, abrirLaudo, fecharLaudo,
       ataAberta, abrirAta, fecharAta,
-      formatarData, formatarMoeda,
+      formatarData, formatarMoeda, sugestoesSetor,
     };
   },
   template: `
@@ -858,7 +865,10 @@ const RncModule = {
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Setor/Departamento</label>
-              <input v-model="form.setor" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+              <input v-model="form.setor" type="text" list="rnc-sugestoes-setor" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+              <datalist id="rnc-sugestoes-setor">
+                <option v-for="s in sugestoesSetor" :key="s" :value="s"></option>
+              </datalist>
             </div>
 
             <div v-if="relacionadas.length" class="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-1.5">
