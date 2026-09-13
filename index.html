@@ -1161,35 +1161,44 @@ function calcularVencimentoChecagem(dataChecagem) {
 // underscore/sem-acento assumidos originalmente), mesmo campos como
 // "Observações" da checagem, que a planilha chama de coluna própria e não
 // de "Laboratorio".
+// Alguns campos (TAG em especial, ex.: "25251329") chegam da planilha como
+// Number quando a célula está formatada como número, não texto. Qualquer
+// operação de string (.toLowerCase, .trim, .includes) quebra em silêncio
+//("x.toLowerCase is not a function") se o valor não for garantidamente uma
+// string — daí todo campo textual de normalizeCalibracao passar por aqui.
+function textoSeguro(v) {
+  return (v === undefined || v === null) ? "" : v.toString().trim();
+}
+
 function normalizeCalibracao(c) {
-  const dataChecagem = c.Data_Checagem || c.DataChecagem || c.data_checagem || "";
+  const dataChecagem = textoSeguro(c.Data_Checagem || c.DataChecagem || c.data_checagem);
   return {
     id: c.ID || c.Id || c.id || uid(),
-    tag: c.TAG || c.Tag || c.tag || c.Codigo || c.codigo || "",
-    equipamento: c["Descrição"] || c.Descricao || c.descricao || c.Instrumento || c.Equipamento || c.equipamento || c.Nome || c.nome || "",
-    modelo: c["Marca/Modelo"] || c.Marca_Modelo || c.MarcaModelo || c.marca_modelo || c.Modelo || c.modelo || "",
-    capacidade: c.Capacidade || c.capacidade || "",
-    tolerancia: c["Critério de Aceitação"] || c.Criterio_Aceitacao || c.criterio_aceitacao || c.criterio || c.Tolerancia || c.Tolerância || c.tolerancia || c["Tolerância"] || "",
-    numeroSerie: c["Nº de Série"] || c.Numero_Serie || c.NumeroSerie || c.numero_serie || c.numeroSerie || c["Nº_Serie"] || c.NSerie || c.serie || "",
-    area: c.Setor || c.setor || c.Area || c.area || "",
-    responsavel: c.Responsável || c.Operador_Responsavel || c.Operador_Responsave || c.Operador || c.operador || c.Responsavel || c.responsavel || "",
-    certificadoRbc: c["Certificado RBC"] || c.Certificado_RBC || c.CertificadoRBC || c.certificado_rbc || c.Certificado || c.certificado || c.Numero_Certificado || c.numero_certificado || "",
-    laboratorio: c["Observações"] || c.Observacoes || c.Obs_Checagem || c.obsChecagem || c.Laboratorio || c.laboratorio || c.Laboratório || c.laboratório || "",
-    dataCalibracao: c["Data Calibração"] || c.Data_Calibracao || c.DataCalibracao || c.data_calibracao || "",
-    dataValidade: c["Vencimento Calibração"] || c.Vencimento_Calibracao || c.VencimentoCalibracao || c.vencimento_calibracao || c.Validade || c.validade
-      || c.Data_Validade || c.DataValidade || c.data_validade || c.Proxima_Calibracao || c.ProximaCalibracao || "",
+    tag: textoSeguro(c.TAG || c.Tag || c.tag || c.Codigo || c.codigo),
+    equipamento: textoSeguro(c["Descrição"] || c.Descricao || c.descricao || c.Instrumento || c.Equipamento || c.equipamento || c.Nome || c.nome),
+    modelo: textoSeguro(c["Marca/Modelo"] || c.Marca_Modelo || c.MarcaModelo || c.marca_modelo || c.Modelo || c.modelo),
+    capacidade: textoSeguro(c.Capacidade || c.capacidade),
+    tolerancia: textoSeguro(c["Critério de Aceitação"] || c.Criterio_Aceitacao || c.criterio_aceitacao || c.criterio || c.Tolerancia || c.Tolerância || c.tolerancia || c["Tolerância"]),
+    numeroSerie: textoSeguro(c["Nº de Série"] || c.Numero_Serie || c.NumeroSerie || c.numero_serie || c.numeroSerie || c["Nº_Serie"] || c.NSerie || c.serie),
+    area: textoSeguro(c.Setor || c.setor || c.Area || c.area),
+    responsavel: textoSeguro(c.Responsável || c.Operador_Responsavel || c.Operador_Responsave || c.Operador || c.operador || c.Responsavel || c.responsavel),
+    certificadoRbc: textoSeguro(c["Certificado RBC"] || c.Certificado_RBC || c.CertificadoRBC || c.certificado_rbc || c.Certificado || c.certificado || c.Numero_Certificado || c.numero_certificado),
+    laboratorio: textoSeguro(c["Observações"] || c.Observacoes || c.Obs_Checagem || c.obsChecagem || c.Laboratorio || c.laboratorio || c.Laboratório || c.laboratório),
+    dataCalibracao: textoSeguro(c["Data Calibração"] || c.Data_Calibracao || c.DataCalibracao || c.data_calibracao),
+    dataValidade: textoSeguro(c["Vencimento Calibração"] || c.Vencimento_Calibracao || c.VencimentoCalibracao || c.vencimento_calibracao || c.Validade || c.validade
+      || c.Data_Validade || c.DataValidade || c.data_validade || c.Proxima_Calibracao || c.ProximaCalibracao),
     dataChecagem,
-    vencimentoChecagem: c.Vencimento_Checagem || c.VencimentoChecagem || c.vencimento_checagem || c.vencimentoChecagem || calcularVencimentoChecagem(dataChecagem),
+    vencimentoChecagem: textoSeguro(c.Vencimento_Checagem || c.VencimentoChecagem || c.vencimento_checagem || c.vencimentoChecagem) || calcularVencimentoChecagem(dataChecagem),
     emCalibracao: parseBooleanoFlexivel(c.Em_Calibracao ?? c.EmCalibracao ?? c.em_calibracao ?? c.Situacao ?? c.situacao),
-    dataEnvioLaboratorio: c.Data_Envio_Laboratorio || c.DataEnvioLaboratorio || c.data_envio_laboratorio || "",
-    previsaoRetorno: c.Previsao_Retorno || c.PrevisaoRetorno || c.previsao_retorno || "",
-    urlCertificado: c["Link Laudo PDF"] || c.Link_Laudo_PDF || c.linkLaudo || c.URL_Certificado || c.UrlCertificado || c.url_certificado || c.Link_Certificado || c.link_certificado || "",
+    dataEnvioLaboratorio: textoSeguro(c.Data_Envio_Laboratorio || c.DataEnvioLaboratorio || c.data_envio_laboratorio),
+    previsaoRetorno: textoSeguro(c.Previsao_Retorno || c.PrevisaoRetorno || c.previsao_retorno),
+    urlCertificado: textoSeguro(c["Link Laudo PDF"] || c.Link_Laudo_PDF || c.linkLaudo || c.URL_Certificado || c.UrlCertificado || c.url_certificado || c.Link_Certificado || c.link_certificado),
     // Status textual já calculado na planilha (ex.: fórmula de "Prazo - Mais
     // de 45 dias"), mantido só como referência bruta — o selo colorido
     // exibido na tela continua vindo de `statusInstrumentoCalibracao`, que
     // já cobre "Em Calibração" e os limiares de 45 dias de forma consistente
     // com os cards de resumo e os filtros.
-    statusBruto: c.Status || c.status || "Prazo - Mais de 45 dias",
+    statusBruto: textoSeguro(c.Status || c.status) || "Prazo - Mais de 45 dias",
   };
 }
 
@@ -7430,6 +7439,13 @@ const CalibracaoModule = {
     const filtroBusca = ref("");
     const formAberto = ref(false);
     const editandoId = ref(null);
+    // TAG do instrumento capturada no momento em que o modal de edição é
+    // aberto — usada para localizar a linha a atualizar (ver salvar()),
+    // porque o "id" de cada item não é estável: sem coluna própria de ID na
+    // planilha, normalizeCalibracao gera um uid() novo a cada carregar(),
+    // então um reload em segundo plano entre abrir e salvar fazia o find por
+    // id falhar e duplicar o instrumento (unshift de uma linha nova).
+    const tagOriginalEdicao = ref("");
 
     const fichaAberta = ref(false);
     const instrumentoFicha = ref(null);
@@ -7519,20 +7535,28 @@ const CalibracaoModule = {
     });
 
     const listaFiltrada = computed(() => {
-      const termo = filtroBusca.value.trim().toLowerCase();
+      // textoSeguro em cada campo: mesmo já normalizados por normalizeCalibracao,
+      // uma segunda blindagem aqui não custa nada e evita que qualquer campo
+      // não-string (ex.: TAG numérica tipo 25251329) quebre a busca com
+      // "toLowerCase is not a function".
+      const termo = textoSeguro(filtroBusca.value).toLowerCase();
       return listaComStatus.value
         .filter(c => filtroArea.value === "todas" || normalizarTexto(c.area) === normalizarTexto(filtroArea.value))
         .filter(c => filtroStatus.value === "todos" || c.status.label === filtroStatus.value)
         .filter(c => !termo
-          || c.equipamento.toLowerCase().includes(termo)
-          || (c.tag || "").toLowerCase().includes(termo)
-          || c.certificadoRbc.toLowerCase().includes(termo))
+          || textoSeguro(c.equipamento).toLowerCase().includes(termo)
+          || textoSeguro(c.tag).toLowerCase().includes(termo)
+          || textoSeguro(c.certificadoRbc).toLowerCase().includes(termo)
+          || textoSeguro(c.area).toLowerCase().includes(termo)
+          || textoSeguro(c.responsavel).toLowerCase().includes(termo)
+          || textoSeguro(c.numeroSerie).toLowerCase().includes(termo))
         .sort((a, b) => (a.status.diffDias ?? Infinity) - (b.status.diffDias ?? Infinity));
     });
 
     function abrirNovo() {
       Object.assign(form, formVazio());
       editandoId.value = null;
+      tagOriginalEdicao.value = "";
       formAberto.value = true;
     }
     function abrirEdicao(c) {
@@ -7545,6 +7569,7 @@ const CalibracaoModule = {
         dataChecagem: c.dataChecagem, vencimentoChecagem: c.vencimentoChecagem,
       });
       editandoId.value = c.id;
+      tagOriginalEdicao.value = textoSeguro(c.tag);
       formAberto.value = true;
       fecharFicha();
     }
@@ -7569,6 +7594,11 @@ const CalibracaoModule = {
         // própria TAG do instrumento (não há coluna de ID estável).
         const t = v => (v ?? "").toString().trim();
         const tagValor = t(form.tag);
+        // tagOriginal identifica a linha a atualizar mesmo que o usuário
+        // tenha renomeado a TAG dentro do próprio formulário — sem isso, o
+        // backend tentaria localizar a linha pela TAG NOVA (que ainda não
+        // existe na planilha) e não encontraria nada para atualizar.
+        const tagOriginalValor = tagOriginalEdicao.value || tagValor;
         // Os nomes internos do formulário (equipamento, area, tolerancia,
         // responsavel, certificadoRbc, laboratorio, urlCertificado,
         // dataValidade) nunca bateram com os parâmetros que o Apps Script
@@ -7580,7 +7610,7 @@ const CalibracaoModule = {
         // com valores vazios/indefinidos por não reconhecer os parâmetros.
         const statusCalculado = statusValidadeCalibracao(form.dataValidade).label;
         const resp = await saveCalibracaoApi({
-          id, tag: tagValor, TAG: tagValor,
+          id, tag: tagValor, TAG: tagValor, tagOriginal: tagOriginalValor,
           descricao: t(form.equipamento), marcaModelo: t(form.modelo), capacidade: t(form.capacidade),
           criterio: t(form.tolerancia), numeroSerie: t(form.numeroSerie), setor: t(form.area),
           operador: t(form.responsavel), certificadoRBC: t(form.certificadoRbc), obsChecagem: t(form.laboratorio),
@@ -7603,7 +7633,14 @@ const CalibracaoModule = {
           // status errado no badge até o próximo carregar() corrigir.
           Status: statusCalculado,
         });
-        const idx = lista.value.findIndex(c => c.id === id);
+        // Localizar pela TAG (normalizada, maiúscula e sem espaços), não
+        // pelo id: o id de um item sem coluna própria de ID na planilha é
+        // regerado a cada carregar(), então comparar por id podia falhar
+        // (achando -1 e duplicando via unshift) se um reload em segundo
+        // plano de um salvamento anterior tivesse acabado de trocar os ids
+        // em memória entre o usuário abrir e confirmar esta edição.
+        const normalizarChave = v => textoSeguro(v).toUpperCase().replace(/\s+/g, "");
+        const idx = lista.value.findIndex(c => normalizarChave(c.tag) === normalizarChave(tagOriginalValor));
         if (idx === -1) lista.value.unshift(atualizado);
         else lista.value[idx] = atualizado;
         pushToast(editandoId.value ? "Calibração atualizada." : "Instrumento cadastrado.", "success");
@@ -7633,10 +7670,10 @@ const CalibracaoModule = {
       try {
         const hoje = formatarDataISO(new Date());
         const vencimento = calcularVencimentoChecagem(hoje);
-        const tagValor = (item.TAG || item.tag || item.codigo || "").toString().trim();
+        const tagValor = textoSeguro(item.TAG || item.tag || item.codigo);
         // Mesmos nomes de parâmetro corrigidos de salvar() — ver comentário lá.
         const resp = await saveCalibracaoApi({
-          id: item.id, tag: tagValor, TAG: tagValor,
+          id: item.id, tag: tagValor, TAG: tagValor, tagOriginal: tagValor,
           descricao: item.equipamento, marcaModelo: item.modelo, capacidade: item.capacidade,
           criterio: item.tolerancia, numeroSerie: item.numeroSerie, setor: item.area,
           operador: item.responsavel, certificadoRBC: item.certificadoRbc, obsChecagem: item.laboratorio,
@@ -7647,7 +7684,9 @@ const CalibracaoModule = {
           dataChecagem: hoje, vencimentoChecagem: vencimento, operadorChecagem: operador,
         });
         if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao registrar a checagem.");
-        const idx = lista.value.findIndex(c => c.id === item.id);
+        // Localizar pela TAG, não pelo id (ver mesmo comentário em salvar()).
+        const normalizarChave = v => textoSeguro(v).toUpperCase().replace(/\s+/g, "");
+        const idx = lista.value.findIndex(c => normalizarChave(c.tag) === normalizarChave(tagValor));
         if (idx !== -1) lista.value[idx] = { ...lista.value[idx], dataChecagem: hoje, vencimentoChecagem: vencimento };
         pushToast("Checagem semestral registrada com sucesso.", "success");
         fecharChecagem();
