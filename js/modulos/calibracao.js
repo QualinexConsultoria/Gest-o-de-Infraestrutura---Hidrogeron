@@ -551,8 +551,17 @@ const CalibracaoModule = {
       aplicarDeepLinkPendente();
     }
     onMounted(carregar);
+    onMounted(() => carregarCadastrosMestres());
 
     const areas = computed(() => unirAreas(lista.value));
+    // Sugestões (datalist) vindas da Central de Cadastros Mestres para os
+    // campos livres de Instrumento/Responsável/Laboratório — continuam sendo
+    // <input> de texto (não <select>) para não travar o preenchimento quando
+    // o cadastro ainda estiver vazio ou o valor salvo não bater com nenhuma
+    // opção cadastrada.
+    const sugestoesInstrumento = computed(() => nomesCadastro("tiposEquipamento"));
+    const sugestoesResponsavel = computed(() => nomesCadastro("pessoas"));
+    const sugestoesLaboratorio = computed(() => nomesCadastro("fornecedores"));
 
     const listaComStatus = computed(() => lista.value.map(c => ({ ...c, status: statusInstrumentoCalibracao(c) })));
 
@@ -740,6 +749,7 @@ const CalibracaoModule = {
       loading, erro, listaFiltrada, resumo, areas, filtroArea, filtroStatus, filtroBusca,
       formAberto, form, editandoId, salvando, abrirNovo, abrirEdicao, fecharForm, salvar, formatarData,
       nomeInstrumentoModelo, capacidadeTolerancia,
+      sugestoesInstrumento, sugestoesResponsavel, sugestoesLaboratorio,
       fichaAberta, instrumentoFicha, abrirFicha, fecharFicha,
       qrAberto, instrumentoQR, abrirQR, fecharQR,
       laudoAberto, instrumentoLaudo, abrirLaudo, fecharLaudo,
@@ -879,7 +889,10 @@ const CalibracaoModule = {
         </div>
         <div>
           <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Instrumento *</label>
-          <input v-model="form.equipamento" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          <input v-model="form.equipamento" type="text" list="calib-sugestoes-instrumento" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          <datalist id="calib-sugestoes-instrumento">
+            <option v-for="s in sugestoesInstrumento" :key="s" :value="s"></option>
+          </datalist>
         </div>
         <div>
           <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Modelo</label>
@@ -904,7 +917,10 @@ const CalibracaoModule = {
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Responsável</label>
-            <input v-model="form.responsavel" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            <input v-model="form.responsavel" type="text" list="calib-sugestoes-responsavel" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            <datalist id="calib-sugestoes-responsavel">
+              <option v-for="s in sugestoesResponsavel" :key="s" :value="s"></option>
+            </datalist>
           </div>
         </div>
         <div>
@@ -913,7 +929,10 @@ const CalibracaoModule = {
         </div>
         <div>
           <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Laboratório</label>
-          <input v-model="form.laboratorio" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          <input v-model="form.laboratorio" type="text" list="calib-sugestoes-laboratorio" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          <datalist id="calib-sugestoes-laboratorio">
+            <option v-for="s in sugestoesLaboratorio" :key="s" :value="s"></option>
+          </datalist>
         </div>
         <div>
           <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Link do Certificado (PDF)</label>

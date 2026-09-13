@@ -32,6 +32,17 @@ const AREAS = ["Uso Geral", "Coating", "Metalmecânica", "Preparação", "Hidrá
 function unirAreas(listaEquipamentos) {
   const resultado = AREAS.slice();
   const vistos = new Set(AREAS.map(a => normalizarTexto(a)));
+  // Setores cadastrados na Central de Cadastros Mestres entram na mesma
+  // união, sem duplicar os que já existem em AREAS (cadastrosMestresState é
+  // populado por js/modulos/cadastros.js, carregado antes dos módulos que
+  // chamam unirAreas — fica vazio até isso acontecer, o que já é coberto
+  // pelo fallback de AREAS abaixo).
+  nomesCadastro("setores").forEach(nome => {
+    const chave = normalizarTexto(nome);
+    if (vistos.has(chave)) return;
+    vistos.add(chave);
+    resultado.push(nome);
+  });
   (listaEquipamentos || []).forEach(eq => {
     const area = (eq && (eq.area || eq.Area) || "").trim();
     if (!area) return;
@@ -2480,10 +2491,16 @@ const App = {
       return "bg-slate-500/20 text-slate-300 ring-1 ring-slate-400/40";
     });
 
+    // Acesso rápido à Central de Cadastros Mestres a partir de qualquer tela
+    // (o app não tem um menu lateral fixo — a navegação é toda por cards no
+    // HomeHub — então este botão no cabeçalho cumpre o mesmo papel de um
+    // atalho sempre visível, complementando o card já existente na Home).
+    const souAdminApp = computed(() => isAdmin(user.value));
+
     return {
       user, currentView, handleLoginSuccess, logout, irParaHome, navigate, currentTitle, cargoBadgeClass,
       erroRenderizacao, tentarNovamenteRenderizacao, perfilAberto, abrirPerfil, fecharPerfil,
-      deepLinkCalibracaoId, abrirInstrumentoCalibracao,
+      deepLinkCalibracaoId, abrirInstrumentoCalibracao, souAdminApp,
     };
   },
   template: `
@@ -2515,6 +2532,9 @@ const App = {
                   {{ user.cargo || "Colaborador" }}
                 </span>
               </div>
+              <button v-if="souAdminApp" @click="navigate('cadastros')" title="Central de Cadastros Mestres" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 w-9 h-9 rounded-lg flex items-center justify-center shrink-0">
+                ⚙️
+              </button>
               <button @click="abrirPerfil" title="Meu Perfil" class="btn-tap text-xs font-semibold bg-slate-800 hover:bg-slate-700 w-9 h-9 rounded-lg flex items-center justify-center shrink-0">
                 👤
               </button>
