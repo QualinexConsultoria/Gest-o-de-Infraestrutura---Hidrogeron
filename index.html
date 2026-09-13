@@ -2591,7 +2591,14 @@ const App = {
     <meu-perfil-modal v-if="perfilAberto" :user="user" @fechar="fecharPerfil"></meu-perfil-modal>
   </div>`
 };
-createApp(App).mount("#app");
+const app = createApp(App);
+// Registro global (não só local em App.components): permite que
+// CadastrosMestresModule (js/modulos/cadastros.js, carregado antes deste
+// script) use <gestao-usuarios-module> na aba "Usuários / Acessos" sem
+// precisar declarar o componente na própria definição — evitaria referenciar
+// GestaoUsuariosModule antes de este script (onde ele é definido) executar.
+app.component("GestaoUsuariosModule", GestaoUsuariosModule);
+app.mount("#app");
 </script>
 </body>
 </html>
