@@ -1,0 +1,32 @@
+/* css/layout.css — Hidrogeron
+   Estrutura, comportamento e animações globais. A grande maioria das cores
+   da aplicação vem de classes utilitárias do Tailwind diretamente nos
+   templates dos componentes Vue (ex.: bg-emerald-100, text-red-700) — este
+   projeto não usa um sistema de cores em CSS customizado além do pouco que
+   está em css/cores.css. */
+
+:root { font-family: 'Inter', system-ui, sans-serif; }
+html, body { -webkit-tap-highlight-color: transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity .15s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.btn-tap { transition: transform .05s ease; }
+.btn-tap:active { transform: scale(0.96); }
+
+.spinner {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.4);
+  animation: spin .7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media print {
+  body * { visibility: hidden; }
+  #laudo-imprimivel, #laudo-imprimivel * { visibility: visible; }
+  #laudo-imprimivel { position: absolute; top: 0; left: 0; width: 100%; padding: 16px; }
+  .no-print { display: none !important; }
+  .laudo-matriz { width: 100%; table-layout: fixed; font-size: 10px; }
+  .laudo-matriz tr { break-inside: avoid; page-break-inside: avoid; }
+  .laudo-matriz img { max-width: 60px; max-height: 60px; }
+}
