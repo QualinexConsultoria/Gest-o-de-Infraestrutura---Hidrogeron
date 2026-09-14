@@ -170,9 +170,20 @@ const CadastrosMestresModule = {
     }
     onMounted(carregar);
 
+    // "usuarios" não é um cadastro genérico (tem campos e regras próprias:
+    // PIN, ativar/desativar, alterar PIN de terceiros) — em vez de duplicar
+    // essa lógica aqui, a aba só embute o GestaoUsuariosModule já existente
+    // (registrado globalmente em index.html), preservando 100% do
+    // comportamento e das chamadas de API que ele já fazia como tela
+    // própria. A tela "Gestão de Usuários e Acessos" isolada continua
+    // funcionando normalmente para quem já a usa por esse caminho.
+    const abaUsuarios = { chave: "usuarios", label: "Usuários / Acessos", icon: "👥" };
+    const abasVisiveis = computed(() => [...TIPOS_CADASTRO, abaUsuarios]);
+
     const tipoAtivo = computed(() => TIPOS_CADASTRO.find(t => t.chave === abaAtiva.value));
     const listaAtiva = computed(() => cadastrosMestresState[abaAtiva.value] || []);
     const listaFiltrada = computed(() => {
+      if (!tipoAtivo.value) return [];
       const termo = normalizarTexto(filtroBusca.value.trim());
       if (!termo) return listaAtiva.value;
       return listaAtiva.value.filter(item => {
@@ -263,7 +274,7 @@ const CadastrosMestresModule = {
     }
 
     return {
-      TIPOS_CADASTRO, abaAtiva, loading, erro, salvando, tipoAtivo, listaAtiva, listaFiltrada, filtroBusca,
+      TIPOS_CADASTRO, abasVisiveis, abaAtiva, loading, erro, salvando, tipoAtivo, listaAtiva, listaFiltrada, filtroBusca,
       trocarAba, souAdmin, excluirAlvo, excluindo, pedirExclusao, cancelarExclusao, confirmarExclusao, carregar,
       modalAberto, itemEditando, abrirNovo, abrirEdicao, fecharModal, salvarItem, alternarAtivo,
     };
@@ -272,17 +283,20 @@ const CadastrosMestresModule = {
   <div>
     <div class="mb-6">
       <h1 class="text-xl sm:text-2xl font-extrabold text-slate-800">Central de Cadastros Mestres</h1>
-      <p class="text-slate-500 text-sm mt-1">Setores, Tipos de Equipamentos, Fornecedores/Laboratórios e Responsáveis usados nos demais módulos.</p>
+      <p class="text-slate-500 text-sm mt-1">Setores, Tipos de Equipamentos, Fornecedores/Laboratórios, Responsáveis e Usuários/Acessos usados nos demais módulos.</p>
     </div>
 
     <div class="flex gap-2 flex-wrap mb-4">
-      <button v-for="t in TIPOS_CADASTRO" :key="t.chave" @click="trocarAba(t.chave)"
+      <button v-for="t in abasVisiveis" :key="t.chave" @click="trocarAba(t.chave)"
         class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5"
         :class="abaAtiva === t.chave ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-600'">
         <span>{{ t.icon }}</span><span>{{ t.label }}</span>
       </button>
     </div>
 
+    <gestao-usuarios-module v-if="abaAtiva === 'usuarios'"></gestao-usuarios-module>
+
+    <template v-else>
     <div class="flex flex-col sm:flex-row gap-2 mb-4">
       <div class="relative flex-1">
         <input v-model="filtroBusca" type="text" placeholder="Buscar..."
@@ -351,5 +365,6 @@ const CadastrosMestresModule = {
         </div>
       </div>
     </div>
+    </template>
   </div>`
 };
