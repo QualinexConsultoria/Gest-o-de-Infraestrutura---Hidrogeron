@@ -144,14 +144,14 @@ const HomeHub = {
 
     function badgeOperacional(item) {
       if (item.rota === "corretiva") {
-        if (abertosCount.value) return { texto: `${abertosCount.value} em aberto`, cls: "bg-red-100 text-red-700" };
-        if (abertosCount.value === 0) return { texto: "Tudo em dia", cls: "bg-emerald-100 text-emerald-700" };
+        if (abertosCount.value) return { texto: `${abertosCount.value} em aberto`, cls: "bg-rose-50 text-rose-700" };
+        if (abertosCount.value === 0) return { texto: "Tudo em dia", cls: "bg-emerald-50 text-emerald-700" };
       }
       if (item.rota === "calibracao" && vencidosCalibracaoCount.value) {
-        return { texto: `${vencidosCalibracaoCount.value} vencido(s)`, cls: "bg-red-100 text-red-700" };
+        return { texto: `${vencidosCalibracaoCount.value} vencido(s)`, cls: "bg-rose-50 text-rose-700" };
       }
       if (item.rota === "rnc" && rncsPendentesCount.value) {
-        return { texto: `${rncsPendentesCount.value} pendente(s)`, cls: "bg-red-100 text-red-700" };
+        return { texto: `${rncsPendentesCount.value} pendente(s)`, cls: "bg-rose-50 text-rose-700" };
       }
       return null;
     }
@@ -197,7 +197,7 @@ const HomeHub = {
           <span class="flex items-center gap-3 min-w-0">
             <span class="text-2xl shrink-0">{{ s.icon }}</span>
             <span class="font-bold text-slate-800 text-sm sm:text-base truncate">{{ s.titulo }}</span>
-            <span v-if="s.badgeSecao" class="shrink-0 text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+            <span v-if="s.badgeSecao" class="shrink-0 text-[10px] font-bold uppercase tracking-wide bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
               {{ s.badgeSecao }}
             </span>
           </span>
@@ -216,10 +216,10 @@ const HomeHub = {
                 :class="itemClicavel(item)
                   ? 'bg-white border-slate-200 hover:border-sky-300 hover:shadow-md cursor-pointer btn-tap'
                   : 'bg-slate-50 border-dashed border-slate-300 opacity-80'">
-                <span v-if="item.emBreve" class="absolute top-2.5 right-2.5 text-[9px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                <span v-if="item.emBreve" class="absolute top-2.5 right-2.5 text-[9px] font-bold uppercase tracking-wide bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-full">
                   Em Breve
                 </span>
-                <span v-else-if="item.selo" class="absolute top-2.5 right-2.5 text-[9px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">
+                <span v-else-if="item.selo" class="absolute top-2.5 right-2.5 text-[9px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">
                   {{ item.selo }}
                 </span>
                 <span v-else-if="badgeOperacional(item)" class="absolute top-2.5 right-2.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" :class="badgeOperacional(item).cls">
@@ -236,7 +236,7 @@ const HomeHub = {
                 <!-- Contato Direto via WhatsApp: botões inline, não é um link de navegação -->
                 <div v-if="item.tipo === 'whatsapp'" class="flex flex-wrap gap-1.5 mt-3">
                   <button v-for="c in contatos" :key="c.cargo" @click.stop="abrirWhatsApp(c.numero, 'Olá, ' + c.cargo + '! ')"
-                    class="btn-tap flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold px-2.5 py-1.5 rounded-full text-xs border border-emerald-200">
+                    class="btn-tap flex items-center gap-1 bg-emerald-50 hover:bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-1.5 rounded-full text-xs border border-emerald-200">
                     💬 {{ c.cargo }}
                   </button>
                 </div>

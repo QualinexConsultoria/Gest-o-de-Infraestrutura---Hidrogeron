@@ -70,9 +70,9 @@ function statusValidadeCalibracao(dataValidade) {
   if (!d) return { label: "Sem data", cor: "⚪", cls: "bg-slate-100 text-slate-600" };
   const hoje = new Date();
   const diffDias = Math.floor((d.getTime() - new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()).getTime()) / 86400000);
-  if (diffDias < 0) return { label: "Vencido", cor: "🔴", cls: "bg-red-100 text-red-700", diffDias };
-  if (diffDias <= 45) return { label: "Atenção", cor: "🟡", cls: "bg-amber-100 text-amber-700", diffDias };
-  return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-100 text-emerald-700", diffDias };
+  if (diffDias < 0) return { label: "Vencido", cor: "🔴", cls: "bg-rose-50 text-rose-700", diffDias };
+  if (diffDias <= 45) return { label: "Atenção", cor: "🟡", cls: "bg-amber-50 text-amber-700", diffDias };
+  return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-50 text-emerald-700", diffDias };
 }
 // Classificação a partir do texto já calculado pela própria planilha (coluna
 // "Status" da aba Calibracoes_Controle, ex.: "Prazo - Mais de 45 dias",
@@ -86,16 +86,16 @@ function classificarStatusPlanilha(statusTexto) {
   const t = (statusTexto || "").toString().trim().toUpperCase();
   if (!t) return null;
   if (t.includes("VENCEU") || t.includes("VENCIDO")) {
-    return { label: "Vencido", cor: "🔴", cls: "bg-red-100 text-red-700" };
+    return { label: "Vencido", cor: "🔴", cls: "bg-rose-50 text-rose-700" };
   }
   if (t.includes("ENCAMINHADO") || t.includes("CALIBRAÇÃO") || t.includes("CALIBRAR") || t.includes("LABORATÓRIO")) {
-    return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-100 text-orange-700" };
+    return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-50 text-orange-700" };
   }
   if (t.includes("MENOS DE 45") || t.includes("MENOS DE 30") || t.includes("MENOS DE 10") || t.includes("ATENÇÃO")) {
-    return { label: "Atenção", cor: "🟡", cls: "bg-amber-100 text-amber-700" };
+    return { label: "Atenção", cor: "🟡", cls: "bg-amber-50 text-amber-700" };
   }
   if (t.includes("MAIS DE 45") || t.includes("CALIBRADO") || t.includes("NO PRAZO") || t.includes("EM DIA")) {
-    return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-100 text-emerald-700" };
+    return { label: "No Prazo", cor: "🟢", cls: "bg-emerald-50 text-emerald-700" };
   }
   return null;
 }
@@ -107,7 +107,7 @@ function classificarStatusPlanilha(statusTexto) {
 function statusInstrumentoCalibracao(c) {
   const daPlanilha = classificarStatusPlanilha(c && c.statusBruto);
   if (daPlanilha) return daPlanilha;
-  if (c && c.emCalibracao) return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-100 text-orange-700" };
+  if (c && c.emCalibracao) return { label: "Em Calibração", cor: "🟠", cls: "bg-orange-50 text-orange-700" };
   return statusValidadeCalibracao(c && c.dataValidade);
 }
 // Deep link do instrumento: impresso como QR Code na etiqueta (RSG-7601-02)
@@ -823,7 +823,7 @@ const CalibracaoModule = {
     <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
       <table class="text-xs w-full border-collapse">
         <thead>
-          <tr class="bg-slate-800 text-white">
+          <tr class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
             <th class="px-3 py-2 text-left whitespace-nowrap">TAG</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">Instrumento / Modelo</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">Capacidade &amp; Tolerância</th>

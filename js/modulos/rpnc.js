@@ -228,7 +228,7 @@ const LaudoRncModal = {
             <p class="col-span-2"><span class="text-slate-400">Descrição do Defeito:</span> <span class="font-medium text-slate-800">{{ rnc.descricaoDefeito || '-' }}</span></p>
           </div>
           <p v-if="rnc.reincidente" class="mt-2">
-            <span class="text-xs font-bold px-3 py-1 rounded-full bg-orange-100 text-orange-700">🔁 Item Reincidente</span>
+            <span class="text-xs font-bold px-3 py-1 rounded-full bg-orange-50 text-orange-700">🔁 Item Reincidente</span>
           </p>
         </div>
 
@@ -418,12 +418,12 @@ const AtaDiretoriaModal = {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="p in paretoItens" :key="p.chave" class="border-t border-slate-100">
+              <tr v-for="p in paretoItens" :key="p.chave" class="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                 <td class="px-2 py-1.5">{{ p.chave }}<span v-if="p.descricao" class="text-slate-400"> — {{ p.descricao }}</span></td>
                 <td class="px-2 py-1.5">{{ p.ocorrencias }}</td>
                 <td class="px-2 py-1.5">{{ formatarMoeda(p.custo) }}</td>
                 <td class="px-2 py-1.5">
-                  <span v-if="p.ocorrencias >= 2" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">🔴 Crônico</span>
+                  <span v-if="p.ocorrencias >= 2" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">🔴 Crônico</span>
                   <span v-else class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Pontual</span>
                 </td>
               </tr>
@@ -454,7 +454,7 @@ const AtaDiretoriaModal = {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in itensRiscoMapeamento" :key="r.id" class="border-t border-slate-100">
+              <tr v-for="r in itensRiscoMapeamento" :key="r.id" class="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                 <td class="px-2 py-1.5">{{ r.codigo || '-' }}</td>
                 <td class="px-2 py-1.5">{{ r.descricao || '-' }}</td>
                 <td class="px-2 py-1.5">{{ r.origem || '-' }}</td>
@@ -813,7 +813,7 @@ const RncModule = {
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.origem || "-" }}</td>
             <td class="px-3 py-2 whitespace-nowrap text-slate-600">{{ r.quantidadeNc }}</td>
             <td class="px-3 py-2 whitespace-nowrap">
-              <span v-if="r.reincidente" class="text-xs font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">🔁 Sim</span>
+              <span v-if="r.reincidente" class="text-xs font-bold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">🔁 Sim</span>
               <span v-else class="text-xs text-slate-400">Não</span>
             </td>
             <td class="px-3 py-2">
@@ -942,7 +942,7 @@ const RncModule = {
               <textarea v-model="form.causaRaiz" rows="2" placeholder="Resumo da causa raiz identificada..." class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
               <div v-if="causasSugeridas.length" class="flex flex-wrap gap-1.5 mt-1.5">
                 <button v-for="c in causasSugeridas" :key="c" type="button" @click="aplicarCausaSugerida(c)"
-                  class="btn-tap text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 font-semibold px-2.5 py-1 rounded-full border border-orange-200">
+                  class="btn-tap text-xs bg-orange-50 hover:bg-orange-50 text-orange-700 font-semibold px-2.5 py-1 rounded-full border border-orange-200">
                   Usar: "{{ c }}"
                 </button>
               </div>

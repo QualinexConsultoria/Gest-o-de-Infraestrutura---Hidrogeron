@@ -329,12 +329,12 @@ const CadastrosMestresModule = {
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          <tr v-for="item in listaFiltrada" :key="item.id">
+          <tr v-for="item in listaFiltrada" :key="item.id" class="hover:bg-slate-50 transition-colors">
             <td class="px-4 py-3 font-medium text-slate-800">{{ item.nome }}</td>
             <td v-for="campo in tipoAtivo.campos" :key="campo.chave" class="px-4 py-3 text-slate-600">{{ item[campo.chave] || "-" }}</td>
             <td class="px-4 py-3">
               <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
-                :class="item.ativo !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'">
+                :class="item.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-500'">
                 {{ item.ativo !== false ? "Ativo" : "Inativo" }}
               </span>
             </td>
