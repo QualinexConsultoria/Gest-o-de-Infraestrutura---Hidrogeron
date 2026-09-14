@@ -10,8 +10,8 @@
 const PRIORIDADES = [
   { value: "Baixa",   color: "bg-blue-100 text-blue-700 border-blue-300" },
   { value: "Média",   color: "bg-yellow-100 text-yellow-700 border-yellow-300" },
-  { value: "Alta",    color: "bg-orange-100 text-orange-700 border-orange-300" },
-  { value: "Crítica", color: "bg-red-100 text-red-700 border-red-300" },
+  { value: "Alta",    color: "bg-orange-50 text-orange-700 border-orange-300" },
+  { value: "Crítica", color: "bg-rose-50 text-rose-700 border-red-300" },
 ];
 /* ==========================================================================
    NORMALIZAÇÃO DOS DADOS DA PLANILHA (aceita variações de nome de coluna)
@@ -309,7 +309,7 @@ function mesesProgramadosEquipamento(eq) {
 function corPeriodicidadeItem(p) {
   const v = String(p || "").trim().toLowerCase();
   if (v === "mensal") return "bg-blue-100 text-blue-700";
-  if (v === "semestral") return "bg-orange-100 text-orange-700";
+  if (v === "semestral") return "bg-orange-50 text-orange-700";
   if (v === "anual") return "bg-purple-100 text-purple-700";
   return "bg-slate-100 text-slate-600";
 }
@@ -347,9 +347,9 @@ const LaudoPreventivaModal = {
 
     // Badge da coluna "Condição" da Matriz de Inspeção — ícone + cor por status.
     const CONDICAO_INFO = {
-      C: { icone: "✓", classe: "bg-emerald-100 text-emerald-700" },
-      NC: { icone: "✗", classe: "bg-red-100 text-red-700" },
-      NA: { icone: "⚪", classe: "bg-amber-100 text-amber-700" },
+      C: { icone: "✓", classe: "bg-emerald-50 text-emerald-700" },
+      NC: { icone: "✗", classe: "bg-rose-50 text-rose-700" },
+      NA: { icone: "⚪", classe: "bg-amber-50 text-amber-700" },
     };
     function condicaoInfo(status) {
       return CONDICAO_INFO[status] || { icone: "—", classe: "bg-slate-200 text-slate-600" };
@@ -442,7 +442,7 @@ const LaudoPreventivaModal = {
             <div class="flex items-center justify-between gap-2">
               <p class="text-sm"><span class="text-slate-400">Inspetor/Técnico:</span> <span class="font-medium text-slate-800">{{ laudo.inspetor || '-' }}</span></p>
               <span class="text-xs font-bold px-3 py-1 rounded-full"
-                :class="laudo.statusGeral === 'Não Conforme' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'">
+                :class="laudo.statusGeral === 'Não Conforme' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'">
                 {{ (laudo.statusGeral || 'Conforme').toUpperCase() }}
               </span>
             </div>
@@ -827,7 +827,7 @@ const PreventivaModule = {
     function statusCicloEquipamento(ativo) {
       const info = ultimaInspecao(ativo);
       if (info && info.status === "NC") {
-        return { label: "⚠ Não Conforme", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "nc" };
+        return { label: "⚠ Não Conforme", badge: "bg-rose-50 text-rose-700 border border-red-200", tipo: "nc" };
       }
 
       const agora = new Date();
@@ -847,8 +847,8 @@ const PreventivaModule = {
         });
       });
 
-      if (atrasado) return { label: "✗ Atrasado", badge: "bg-red-100 text-red-700 border border-red-200", tipo: "vencido" };
-      return { label: "✓ Em dia", badge: "bg-emerald-100 text-emerald-700 border border-emerald-200", tipo: "em_dia" };
+      if (atrasado) return { label: "✗ Atrasado", badge: "bg-rose-50 text-rose-700 border border-red-200", tipo: "vencido" };
+      return { label: "✓ Em dia", badge: "bg-emerald-50 text-emerald-700 border border-emerald-200", tipo: "em_dia" };
     }
 
     // Próxima data planejada (3ª quinta-feira) do mês vigente, se houver
@@ -944,7 +944,7 @@ const PreventivaModule = {
     const CORES_CELULA = {
       concluido: "bg-emerald-500 text-white",
       atrasado: "bg-red-500 text-white",
-      programado: "bg-sky-100 text-sky-700",
+      programado: "bg-sky-50 text-sky-700",
     };
 
     // Perfis do ativo programados para aquele mês (pode ter mais de um, ex:
@@ -1621,7 +1621,7 @@ const PreventivaModule = {
                 <span v-if="eq.idDisplay" class="text-slate-400 font-mono text-sm mr-1">[{{ eq.idDisplay }}]</span>{{ eq.nome }}<span v-if="eq.modelo" class="text-slate-400 font-normal"> — {{ eq.modelo }}</span>
               </p>
               <p v-if="eq.perfis && eq.perfis.length" class="flex flex-wrap gap-1 mt-1">
-                <span v-for="perfil in eq.perfis" :key="perfil.id" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 uppercase tracking-wide">{{ perfil.periodicidade || 'Sem periodicidade' }}</span>
+                <span v-for="perfil in eq.perfis" :key="perfil.id" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 uppercase tracking-wide">{{ perfil.periodicidade || 'Sem periodicidade' }}</span>
               </p>
               <p v-if="dataLimiteMesAtual(eq)" class="text-xs text-sky-600 font-semibold mt-1">
                 📅 Vence em: {{ formatarDataCurta(dataLimiteMesAtual(eq)) }}
@@ -1676,14 +1676,14 @@ const PreventivaModule = {
       <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
         <table class="text-xs border-collapse w-full">
           <thead>
-            <tr class="bg-slate-800 text-white">
-              <th class="sticky left-0 bg-slate-800 text-left font-bold px-3 py-2 whitespace-nowrap z-10">Equipamento</th>
+            <tr class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+              <th class="sticky left-0 bg-slate-50 text-left font-bold px-3 py-2 whitespace-nowrap z-10">Equipamento</th>
               <th v-for="m in meses" :key="m.v" class="font-bold px-1.5 py-2 text-center whitespace-nowrap">{{ m.l.slice(0, 3) }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="ativo in ativosCalendario" :key="ativo.chave" class="border-t border-slate-100">
-              <td class="sticky left-0 bg-white text-left px-3 py-2 whitespace-nowrap font-semibold text-slate-700">
+            <tr v-for="ativo in ativosCalendario" :key="ativo.chave" class="group border-t border-slate-100 hover:bg-slate-50 transition-colors">
+              <td class="sticky left-0 bg-white group-hover:bg-slate-50 text-left px-3 py-2 whitespace-nowrap font-semibold text-slate-700 transition-colors">
                 <span v-if="ativo.idDisplay" class="text-slate-400 font-mono mr-1">[{{ ativo.idDisplay }}]</span>{{ ativo.nome }}
               </td>
               <td v-for="m in meses" :key="m.v" class="px-1 py-2 text-center align-middle">
@@ -1719,7 +1719,7 @@ const PreventivaModule = {
         <p v-if="equipamentoSelecionado.modelo" class="text-sm text-slate-500 mt-0.5">Modelo: {{ equipamentoSelecionado.modelo }}</p>
         <p v-if="equipamentoSelecionado.tag" class="text-xs text-slate-400 font-mono mt-0.5">{{ equipamentoSelecionado.tag }}</p>
         <span v-if="ativoSelecionadoEhTI"
-          class="inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+          class="inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
           🖥️ Prestador de Serviço: IRONTECH (Externo)
         </span>
       </div>
@@ -1891,7 +1891,7 @@ const PreventivaModule = {
               <p class="text-xs text-slate-400 truncate">{{ h.area }} · #{{ h.id }}<template v-if="periodicidadeDoEquipamento(h.equipamento, h.area)"> · {{ periodicidadeDoEquipamento(h.equipamento, h.area) }}</template></p>
             </div>
             <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
-              :class="h.status === 'NC' ? 'bg-red-100 text-red-700' : h.status === 'NA' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-700'">
+              :class="h.status === 'NC' ? 'bg-rose-50 text-rose-700' : h.status === 'NA' ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700'">
               {{ formatarStatusLabel(h.status) }}
             </span>
           </div>
@@ -3195,7 +3195,7 @@ const CorretivaModule = {
                   <p class="text-xs text-slate-400 truncate">{{ c.area }}</p>
                 </div>
               </div>
-              <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 whitespace-nowrap shrink-0">
+              <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 whitespace-nowrap shrink-0">
                 {{ c.status }}
               </span>
             </div>
@@ -3283,7 +3283,7 @@ const CorretivaModule = {
         <div class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <table class="text-sm w-full border-collapse">
             <thead>
-              <tr class="bg-slate-800 text-white text-xs">
+              <tr class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
                 <th class="px-3 py-2 text-left whitespace-nowrap">#</th>
                 <th class="px-3 py-2 text-left">Equipamento</th>
                 <th class="px-3 py-2 text-left">Setor</th>
@@ -3292,13 +3292,13 @@ const CorretivaModule = {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in chamadosCalendarioFiltrados" :key="c.id" class="border-t border-slate-100">
+              <tr v-for="c in chamadosCalendarioFiltrados" :key="c.id" class="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                 <td class="px-3 py-2 font-mono text-xs text-slate-400 whitespace-nowrap">#{{ c.id }}</td>
                 <td class="px-3 py-2 text-slate-700">{{ c.equipamento }}</td>
                 <td class="px-3 py-2 text-slate-500">{{ c.area }}</td>
                 <td class="px-3 py-2">
                   <span class="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
-                    :class="String(c.status).toLowerCase() === 'aberto' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'">
+                    :class="String(c.status).toLowerCase() === 'aberto' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'">
                     {{ c.status }}
                   </span>
                 </td>
