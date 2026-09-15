@@ -1,370 +1,596 @@
 /* ==========================================================================
-   js/modulos/cadastros.js — Central de Cadastros Mestres
-   Módulo unificado para Setores/Áreas, Tipos de Equipamentos/Instrumentos,
-   Fornecedores/Laboratórios de Calibração e Responsáveis/Pessoas — dados de
-   apoio consultados pelos demais módulos (Calibração, Preventiva, Corretiva
-   e RNC leem `cadastrosMestresState` para sugerir Setor/Instrumento/
-   Responsável/Laboratório nos formulários, sempre com fallback para as
-   listas locais já existentes quando o cadastro ainda estiver vazio).
-   Depende de js/api.js (getInitialData/saveCadastroApi/deleteCadastroApi) e
-   do núcleo compartilhado do index.html (isAdmin, pushToast, uid,
-   normalizarTexto, parseBooleanoFlexivel).
+   js/modulos/cadastros.js — Central de Cadastros Mestres & Gestão de Usuários
+   Inclui: Setores, Equipamentos, Fornecedores, Pessoas, Usuários e RBAC (Grupos & Permissões)
    ========================================================================== */
-const TIPOS_CADASTRO = [
-  {
-    chave: "setores", label: "Setores / Áreas", singular: "Setor", artigo: "o", icon: "🏭",
-    campos: [],
-  },
-  {
-    chave: "tiposEquipamento", label: "Tipos de Equipamentos", singular: "Tipo de Equipamento", artigo: "o", icon: "🔧",
-    campos: [],
-  },
-  {
-    chave: "fornecedores", label: "Fornecedores / Laboratórios", singular: "Fornecedor", artigo: "o", icon: "🚚",
-    campos: [
-      { chave: "contato", label: "Contato", tipo: "text", placeholder: "Nome ou telefone do contato" },
-      { chave: "email", label: "E-mail", tipo: "email", placeholder: "contato@fornecedor.com" },
-    ],
-  },
-  {
-    chave: "pessoas", label: "Responsáveis / Pessoas", singular: "Pessoa", artigo: "a", icon: "👤",
-    campos: [
-      { chave: "cargo", label: "Cargo / Função", tipo: "text", placeholder: "ex: Técnico de Manutenção" },
-      { chave: "email", label: "E-mail", tipo: "email", placeholder: "nome@hidrogeron.com" },
-      { chave: "pin", label: "PIN de Acesso", tipo: "text", placeholder: "Somente se esta pessoa também acessar o sistema" },
-    ],
-  },
+
+const MODULOS_SISTEMA = [
+  { id: "dashboard", nome: "Dashboard Geral", permiteEditar: false, permiteBaixar: true },
+  { id: "preventiva", nome: "Manutenção Preventiva", permiteEditar: true, permiteBaixar: true },
+  { id: "corretiva", nome: "Manutenção Corretiva", permiteEditar: true, permiteBaixar: true },
+  { id: "ativos", nome: "Gestão de Ativos", permiteEditar: true, permiteBaixar: true },
+  { id: "calibracao", nome: "Calibração & Medição", permiteEditar: true, permiteBaixar: true },
+  { id: "kpis", nome: "Indicadores (KPIs)", permiteEditar: false, permiteBaixar: true },
+  { id: "rpnc", nome: "Registro de Desvios (RNC)", permiteEditar: true, permiteBaixar: true },
+  { id: "cadastros", nome: "Central de Cadastros", permiteEditar: true, permiteBaixar: false }
 ];
 
-// Estado central dos cadastros mestres — populado uma única vez (memoizado)
-// e reutilizado por Calibração/Preventiva/Corretiva/RNC para sugerir
-// Setor/Instrumento/Responsável/Laboratório sem duplicar chamadas de rede.
-const cadastrosMestresState = reactive(
-  Object.fromEntries(TIPOS_CADASTRO.map(t => [t.chave, []]))
-);
-let cadastrosMestresPromise = null;
-
-function normalizeCadastroItem(c, tipo) {
-  const item = {
-    id: c.ID || c.Id || c.id || uid(),
-    nome: c.Nome || c.nome || c["Descrição"] || c.Descricao || c.descricao || "",
-    ativo: parseBooleanoFlexivel(c.Ativo ?? c.ativo ?? true),
-  };
-  const tipoInfo = TIPOS_CADASTRO.find(t => t.chave === tipo);
-  (tipoInfo ? tipoInfo.campos : []).forEach(campo => {
-    const chaveCapitalizada = campo.chave.charAt(0).toUpperCase() + campo.chave.slice(1);
-    item[campo.chave] = c[campo.chave] || c[chaveCapitalizada] || "";
-  });
-  return item;
-}
-
-// getInitialData() ainda não retorna estas coleções no backend atual — cada
-// chave cai num array vazio até o Apps Script expor
-// setores/tiposEquipamento/fornecedores/pessoas, mesmo padrão tolerante
-// (PascalCase/camelCase/data.data) usado pelos demais extractX.
-function extractCadastro(data, chave) {
-  const chaveCapitalizada = chave.charAt(0).toUpperCase() + chave.slice(1);
-  const raw = (data && (data[chave] || data[chaveCapitalizada] || (data.data && (data.data[chave] || data.data[chaveCapitalizada])))) || [];
-  return (Array.isArray(raw) ? raw : []).map(c => normalizeCadastroItem(c, chave));
-}
-
-// Carrega (uma única vez, com memoização) as listas de cadastros mestres a
-// partir de getInitialData(). Chamado tanto pela própria tela de Cadastros
-// quanto no onMounted de Calibração/Preventiva/Corretiva/RNC, para que os
-// selects desses módulos já apareçam preenchidos mesmo que o usuário nunca
-// tenha aberto a Central de Cadastros Mestres nesta sessão.
-async function carregarCadastrosMestres(forcar) {
-  if (cadastrosMestresPromise && !forcar) return cadastrosMestresPromise;
-  cadastrosMestresPromise = (async () => {
-    const data = await getInitialData();
-    TIPOS_CADASTRO.forEach(t => { cadastrosMestresState[t.chave] = extractCadastro(data, t.chave); });
-    return data;
-  })();
-  return cadastrosMestresPromise;
-}
-
-// Lista de nomes ativos de um tipo de cadastro, pronta para popular um
-// select/datalist — usada pelos demais módulos como fonte de sugestões.
-function nomesCadastro(chave) {
-  return (cadastrosMestresState[chave] || []).filter(i => i.ativo !== false).map(i => i.nome);
-}
-
-const CadastroFormModal = {
-  props: { tipo: Object, itemEditando: Object, salvando: Boolean },
-  emits: ["salvar", "fechar"],
-  setup(props, { emit }) {
-    const formVazio = () => {
-      const base = { nome: "", ativo: true };
-      (props.tipo.campos || []).forEach(c => { base[c.chave] = ""; });
-      return base;
-    };
-    const form = reactive(props.itemEditando ? { ...formVazio(), ...props.itemEditando } : formVazio());
-
-    function confirmar() {
-      if (!form.nome.trim()) {
-        pushToast(`Informe o nome d${props.tipo.artigo} ${props.tipo.singular.toLowerCase()}.`, "error");
-        return;
-      }
-      emit("salvar", { ...form, nome: form.nome.trim() });
-    }
-
-    return { form, confirmar };
-  },
-  template: `
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="$emit('fechar')">
-    <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
-      <h3 class="font-bold text-slate-800">{{ itemEditando ? 'Editar' : 'Novo Cadastro' }}: {{ tipo.singular }}</h3>
-
-      <div>
-        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Nome *</label>
-        <input v-model="form.nome" type="text" @keyup.enter="confirmar"
-          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
-      </div>
-
-      <div v-for="campo in tipo.campos" :key="campo.chave">
-        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ campo.label }}</label>
-        <input v-model="form[campo.chave]" :type="campo.tipo" :placeholder="campo.placeholder || ''" @keyup.enter="confirmar"
-          class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
-      </div>
-
-      <div v-if="itemEditando">
-        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Status</label>
-        <select v-model="form.ativo" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
-          <option :value="true">Ativo</option>
-          <option :value="false">Inativo</option>
-        </select>
-      </div>
-
-      <div class="flex gap-2 pt-1">
-        <button @click="$emit('fechar')" :disabled="salvando" class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">Cancelar</button>
-        <button @click="confirmar" :disabled="salvando" class="btn-tap flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm">
-          <span v-if="salvando" class="spinner"></span><span>{{ salvando ? "Salvando..." : "Salvar" }}</span>
-        </button>
-      </div>
-    </div>
-  </div>`
-};
-
-const CadastrosMestresModule = {
-  components: { CadastroFormModal },
+const CadastrosModule = {
   props: { user: Object },
+  emits: ["go-home"],
   setup(props) {
-    const abaAtiva = ref(TIPOS_CADASTRO[0].chave);
-    const loading = ref(true);
-    const erro = ref("");
+    const abaAtiva = ref("setores");
+    const busca = ref("");
+    const loading = ref(false);
     const salvando = ref(false);
-    const filtroBusca = ref("");
-    const souAdmin = computed(() => isAdmin(props.user));
 
-    async function carregar() {
+    // Listas carregadas
+    const setores = ref([]);
+    const tiposEquipamento = ref([]);
+    const fornecedores = ref([]);
+    const pessoas = ref([]);
+    const usuarios = ref([]);
+    const grupos = ref([]);
+
+    // Modal Usuário (Cadastro & Edição)
+    const modalUsuarioAberta = ref(false);
+    const modoEdicaoUsuario = ref(false);
+    const usuarioForm = reactive({
+      id: "",
+      nome: "",
+      email: "",
+      cargo: "",
+      setor: "",
+      perfil: "COLABORADOR",
+      pin: "",
+      ativo: true
+    });
+
+    // Modal Alterar PIN
+    const modalPinAberta = ref(false);
+    const pinForm = reactive({ id: "", nome: "", novoPin: "" });
+    const pinsVisiveis = reactive({});
+
+    // Modal Grupos & Permissões (RBAC)
+    const modalGrupoAberta = ref(false);
+    const grupoForm = reactive({
+      id: "",
+      nome: "",
+      descricao: "",
+      permissoes: {}
+    });
+
+    const isAdmin = computed(() => {
+      const p = (props.user && props.user.perfil || "").toUpperCase();
+      return p === "ADMINISTRADOR" || p === "ADMIN";
+    });
+
+    const totalAdminsAtivos = computed(() => {
+      return usuarios.value.filter(u => {
+        const p = (u.Funcao || u.perfil || u.Cargo || "").toUpperCase();
+        return (p === "ADMINISTRADOR" || p === "ADMIN") && u.ativo !== false;
+      }).length;
+    });
+
+    async function carregarTudo() {
       loading.value = true;
-      erro.value = "";
       try {
-        await carregarCadastrosMestres(true);
+        const data = await getInitialData();
+        setores.value = data.setores || [];
+        tiposEquipamento.value = data.tiposEquipamento || [];
+        fornecedores.value = data.fornecedores || [];
+        pessoas.value = data.pessoas || [];
+        usuarios.value = (data.usuarios || []).map(u => ({
+          ...u,
+          id: u.PIN || u.id || u.ID,
+          nome: u.Nome || u.Usuario || "",
+          email: u.Email || "",
+          cargo: u.Cargo || u.Funcao || "Colaborador",
+          setor: u.Setor || "Uso Geral",
+          perfil: (u.Funcao || u.perfil || u.Cargo || "COLABORADOR").toUpperCase(),
+          ativo: u.Status !== "Inativo" && u.ativo !== false,
+          pin: u.PIN || "",
+          ultimaModificacao: u.Ultima_Modificacao || u.ultimaModificacao || ""
+        }));
+
+        // Carrega grupos de permissão da Config_Cadastros
+        const cadastros = data.cadastros || [];
+        grupos.value = cadastros
+          .filter(c => String(c.Categoria || c.tipo).toLowerCase() === "grupos_permissoes")
+          .map(g => {
+            let perms = {};
+            try { perms = typeof g.Detalhes_JSON === "string" ? JSON.parse(g.Detalhes_JSON) : (g.Detalhes_JSON || {}); } catch(e) {}
+            return {
+              id: g.ID || g.id,
+              nome: g.Nome || "",
+              permissoes: perms.permissoes || {},
+              atualizadoPor: perms.atualizadoPor || "",
+              atualizadoEm: perms.atualizadoEm || ""
+            };
+          });
       } catch (err) {
-        console.error(err);
-        erro.value = "Não foi possível carregar os cadastros mestres.";
+        console.error("Erro ao carregar cadastros:", err);
+        pushToast("Erro ao sincronizar base de cadastros.", "error");
       } finally {
         loading.value = false;
       }
     }
-    onMounted(carregar);
 
-    // "usuarios" não é um cadastro genérico (tem campos e regras próprias:
-    // PIN, ativar/desativar, alterar PIN de terceiros) — em vez de duplicar
-    // essa lógica aqui, a aba só embute o GestaoUsuariosModule já existente
-    // (registrado globalmente em index.html), preservando 100% do
-    // comportamento e das chamadas de API que ele já fazia como tela
-    // própria. A tela "Gestão de Usuários e Acessos" isolada continua
-    // funcionando normalmente para quem já a usa por esse caminho.
-    const abaUsuarios = { chave: "usuarios", label: "Usuários / Acessos", icon: "👥" };
-    const abasVisiveis = computed(() => [...TIPOS_CADASTRO, abaUsuarios]);
+    onMounted(carregarTudo);
 
-    const tipoAtivo = computed(() => TIPOS_CADASTRO.find(t => t.chave === abaAtiva.value));
-    const listaAtiva = computed(() => cadastrosMestresState[abaAtiva.value] || []);
-    const listaFiltrada = computed(() => {
-      if (!tipoAtivo.value) return [];
-      const termo = normalizarTexto(filtroBusca.value.trim());
-      if (!termo) return listaAtiva.value;
-      return listaAtiva.value.filter(item => {
-        const campos = [item.nome, ...(tipoAtivo.value.campos || []).map(c => item[c.chave])];
-        return campos.some(v => normalizarTexto(String(v || "")).includes(termo));
+    // ==================== CONTROLE DE USUÁRIOS ====================
+    function abrirNovoUsuario() {
+      modoEdicaoUsuario.value = false;
+      Object.assign(usuarioForm, {
+        id: "USR-" + Date.now(),
+        nome: "",
+        email: "",
+        cargo: "",
+        setor: setores.value[0] ? (setores.value[0].Nome || setores.value[0].nome) : "Uso Geral",
+        perfil: "COLABORADOR",
+        pin: "",
+        ativo: true
       });
-    });
-    function trocarAba(chave) {
-      abaAtiva.value = chave;
-      filtroBusca.value = "";
+      modalUsuarioAberta.value = true;
     }
 
-    // ===== Modal de criação/edição =====
-    const modalAberto = ref(false);
-    const itemEditando = ref(null);
-    function abrirNovo() {
-      itemEditando.value = null;
-      modalAberto.value = true;
-    }
-    function abrirEdicao(item) {
-      itemEditando.value = item;
-      modalAberto.value = true;
-    }
-    function fecharModal() {
-      modalAberto.value = false;
-      itemEditando.value = null;
+    function abrirEditarUsuario(u) {
+      if (!isAdmin.value) return;
+      modoEdicaoUsuario.value = true;
+      Object.assign(usuarioForm, {
+        id: u.id || u.PIN,
+        nome: u.nome,
+        email: u.email,
+        cargo: u.cargo,
+        setor: u.setor || "Uso Geral",
+        perfil: u.perfil || "COLABORADOR",
+        pin: "", // Deixa vazio para só alterar se preenchido
+        ativo: u.ativo
+      });
+      modalUsuarioAberta.value = true;
     }
 
-    async function salvarItem(dadosForm) {
+    async function salvarUsuario() {
+      if (!usuarioForm.nome.trim()) return pushToast("Informe o nome completo.", "error");
+      if (!usuarioForm.email.trim()) return pushToast("Informe o e-mail.", "error");
+      if (!modoEdicaoUsuario.value && !usuarioForm.pin) return pushToast("Defina o PIN inicial de 4 a 6 dígitos.", "error");
+
+      // Proteção de Auto-Bloqueio
+      if (modoEdicaoUsuario.value && usuarioForm.perfil !== "ADMINISTRADOR") {
+        const itemOriginal = usuarios.value.find(u => u.id === usuarioForm.id);
+        if (itemOriginal && (itemOriginal.perfil === "ADMINISTRADOR" || itemOriginal.perfil === "ADMIN") && totalAdminsAtivos.value <= 1) {
+          return pushToast("Ação bloqueada: o sistema precisa manter ao menos 1 Administrador ativo.", "error");
+        }
+      }
+
       salvando.value = true;
       try {
-        const editando = itemEditando.value;
-        const id = editando ? editando.id : "CAD-" + Date.now();
-        const payload = { id, ...dadosForm };
-        const resp = await saveCadastroApi(abaAtiva.value, payload);
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao salvar.");
-        if (editando) {
-          const idx = cadastrosMestresState[abaAtiva.value].findIndex(i => i.id === editando.id);
-          if (idx !== -1) cadastrosMestresState[abaAtiva.value][idx] = { ...payload };
-        } else {
-          cadastrosMestresState[abaAtiva.value] = [...cadastrosMestresState[abaAtiva.value], { ...payload }];
-        }
-        pushToast(`${tipoAtivo.value.singular} ${editando ? "atualizado" : "cadastrado"} com sucesso!`, "success");
-        fecharModal();
+        const payload = {
+          action: "saveUsuario",
+          id: usuarioForm.id,
+          PIN: usuarioForm.pin ? usuarioForm.pin : undefined,
+          Nome: usuarioForm.nome.trim(),
+          Email: usuarioForm.email.trim().toLowerCase(),
+          Cargo: usuarioForm.cargo.trim(),
+          Setor: usuarioForm.setor,
+          Funcao: usuarioForm.perfil,
+          Status: usuarioForm.ativo ? "Ativo" : "Inativo",
+          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || "Admin"}`
+        };
+
+        await apiPost(payload);
+        pushToast(modoEdicaoUsuario.value ? "Colaborador atualizado com sucesso!" : "Novo colaborador cadastrado!", "success");
+        modalUsuarioAberta.value = false;
+        await carregarTudo();
       } catch (err) {
         console.error(err);
-        pushToast("Erro ao salvar. Tente novamente.", "error");
+        pushToast("Erro ao gravar dados do colaborador.", "error");
       } finally {
         salvando.value = false;
       }
     }
 
-    // ===== Exclusão =====
-    const excluirAlvo = ref(null);
-    const excluindo = ref(false);
-    function pedirExclusao(item) { excluirAlvo.value = item; }
-    function cancelarExclusao() { excluirAlvo.value = null; }
-    async function confirmarExclusao() {
-      const alvo = excluirAlvo.value;
-      if (!alvo) return;
-      excluindo.value = true;
+    async function alternarStatusUsuario(u) {
+      if (!isAdmin.value) return;
+      if (u.ativo && (u.perfil === "ADMINISTRADOR" || u.perfil === "ADMIN") && totalAdminsAtivos.value <= 1) {
+        return pushToast("Não é permitido inativar o único Administrador ativo do sistema.", "error");
+      }
+
+      const novoStatus = !u.ativo;
       try {
-        const resp = await deleteCadastroApi(abaAtiva.value, alvo.id);
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao excluir.");
-        cadastrosMestresState[abaAtiva.value] = cadastrosMestresState[abaAtiva.value].filter(i => i.id !== alvo.id);
-        pushToast(`${tipoAtivo.value.singular} excluído com sucesso!`, "success");
-        excluirAlvo.value = null;
-      } catch (err) {
-        console.error(err);
-        pushToast("Erro ao excluir. Tente novamente.", "error");
-      } finally {
-        excluindo.value = false;
+        await apiPost({
+          action: "saveUsuario",
+          id: u.id || u.PIN,
+          Status: novoStatus ? "Ativo" : "Inativo",
+          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || "Admin"}`
+        });
+        u.ativo = novoStatus;
+        pushToast(`Status de ${u.nome} atualizado para ${novoStatus ? "Ativo" : "Inativo"}.`, "success");
+      } catch (e) {
+        pushToast("Erro ao alterar status do usuário.", "error");
       }
     }
 
-    // ===== Inativar / Reativar (sem excluir o registro) =====
-    async function alternarAtivo(item) {
-      const novoAtivo = !item.ativo;
+    function abrirAlterarPin(u) {
+      Object.assign(pinForm, { id: u.id || u.PIN, nome: u.nome, novoPin: "" });
+      modalPinAberta.value = true;
+    }
+
+    async function salvarPin() {
+      if (!pinForm.novoPin || pinForm.novoPin.length < 4) {
+        return pushToast("O PIN deve ter no mínimo 4 dígitos numéricos.", "error");
+      }
+      salvando.value = true;
       try {
-        const resp = await saveCadastroApi(abaAtiva.value, { ...item, ativo: novoAtivo });
-        if (resp && resp.status === "error") throw new Error(resp.message || "Erro ao atualizar status.");
-        item.ativo = novoAtivo;
-        pushToast(`${tipoAtivo.value.singular} ${novoAtivo ? "reativado" : "inativado"}.`, "success");
-      } catch (err) {
-        console.error(err);
-        pushToast("Erro ao atualizar status. Tente novamente.", "error");
+        await apiPost({ action: "saveUsuario", id: pinForm.id, PIN: pinForm.novoPin });
+        pushToast("PIN redefinido com sucesso!", "success");
+        modalPinAberta.value = false;
+        await carregarTudo();
+      } catch (e) {
+        pushToast("Erro ao atualizar o PIN.", "error");
+      } finally {
+        salvando.value = false;
       }
     }
+
+    function toggleVerPin(id) {
+      pinsVisiveis[id] = !pinsVisiveis[id];
+    }
+
+    // ==================== GRUPOS & PERMISSÕES (RBAC) ====================
+    function abrirNovoGrupo() {
+      const permsIniciais = {};
+      MODULOS_SISTEMA.forEach(m => {
+        permsIniciais[m.id] = { ver: true, editar: false, baixar: false };
+      });
+      Object.assign(grupoForm, {
+        id: "GRP-" + Date.now(),
+        nome: "",
+        permissoes: permsIniciais
+      });
+      modalGrupoAberta.value = true;
+    }
+
+    function abrirEditarGrupo(g) {
+      const perms = {};
+      MODULOS_SISTEMA.forEach(m => {
+        perms[m.id] = {
+          ver: g.permissoes?.[m.id]?.ver ?? true,
+          editar: g.permissoes?.[m.id]?.editar ?? false,
+          baixar: g.permissoes?.[m.id]?.baixar ?? false
+        };
+      });
+      Object.assign(grupoForm, {
+        id: g.id,
+        nome: g.nome,
+        permissoes: perms
+      });
+      modalGrupoAberta.value = true;
+    }
+
+    async function salvarGrupo() {
+      if (!grupoForm.nome.trim()) return pushToast("Dê um nome ao grupo de permissões.", "error");
+      salvando.value = true;
+      try {
+        const payload = {
+          action: "saveCadastro",
+          tipo: "grupos_permissoes",
+          id: grupoForm.id,
+          nome: grupoForm.nome.trim(),
+          permissoes: grupoForm.permissoes,
+          atualizadoPor: props.user?.nome || "Admin",
+          atualizadoEm: new Date().toISOString()
+        };
+        await apiPost(payload);
+        pushToast("Grupo e matriz de permissões atualizados!", "success");
+        modalGrupoAberta.value = false;
+        await carregarTudo();
+      } catch (err) {
+        console.error(err);
+        pushToast("Erro ao gravar perfil de acesso.", "error");
+      } finally {
+        salvando.value = false;
+      }
+    }
+
+    const listaUsuariosFiltrada = computed(() => {
+      const t = busca.value.toLowerCase().trim();
+      if (!t) return usuarios.value;
+      return usuarios.value.filter(u => u.nome.toLowerCase().includes(t) || u.email.toLowerCase().includes(t));
+    });
 
     return {
-      TIPOS_CADASTRO, abasVisiveis, abaAtiva, loading, erro, salvando, tipoAtivo, listaAtiva, listaFiltrada, filtroBusca,
-      trocarAba, souAdmin, excluirAlvo, excluindo, pedirExclusao, cancelarExclusao, confirmarExclusao, carregar,
-      modalAberto, itemEditando, abrirNovo, abrirEdicao, fecharModal, salvarItem, alternarAtivo,
+      abaAtiva, busca, loading, salvando, isAdmin, totalAdminsAtivos,
+      setores, tiposEquipamento, fornecedores, pessoas, usuarios, grupos,
+      listaUsuariosFiltrada, modulosSistema: MODULOS_SISTEMA,
+      modalUsuarioAberta, modoEdicaoUsuario, usuarioForm, abrirNovoUsuario, abrirEditarUsuario, salvarUsuario, alternarStatusUsuario,
+      modalPinAberta, pinForm, pinsVisiveis, abrirAlterarPin, salvarPin, toggleVerPin,
+      modalGrupoAberta, grupoForm, abrirNovoGrupo, abrirEditarGrupo, salvarGrupo
     };
   },
   template: `
-  <div>
-    <div class="mb-6">
-      <h1 class="text-xl sm:text-2xl font-extrabold text-slate-800">Central de Cadastros Mestres</h1>
-      <p class="text-slate-500 text-sm mt-1">Setores, Tipos de Equipamentos, Fornecedores/Laboratórios, Responsáveis e Usuários/Acessos usados nos demais módulos.</p>
-    </div>
-
-    <div class="flex gap-2 flex-wrap mb-4">
-      <button v-for="t in abasVisiveis" :key="t.chave" @click="trocarAba(t.chave)"
-        class="btn-tap px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1.5"
-        :class="abaAtiva === t.chave ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300 text-slate-600'">
-        <span>{{ t.icon }}</span><span>{{ t.label }}</span>
+  <div class="space-y-5">
+    <!-- Abas de Navegação -->
+    <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
+      <button @click="abaAtiva = 'setores'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+        :class="abaAtiva === 'setores' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
+        🏭 Setores / Áreas
+      </button>
+      <button @click="abaAtiva = 'equipamentos'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+        :class="abaAtiva === 'equipamentos' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
+        ⚙️ Tipos de Equipamentos
+      </button>
+      <button @click="abaAtiva = 'fornecedores'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+        :class="abaAtiva === 'fornecedores' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
+        🏢 Fornecedores / Laboratórios
+      </button>
+      <button @click="abaAtiva = 'usuarios'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+        :class="abaAtiva === 'usuarios' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
+        👥 Usuários / Acessos
+      </button>
+      <button @click="abaAtiva = 'grupos'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
+        :class="abaAtiva === 'grupos' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
+        🛡️ Grupos & Permissões
       </button>
     </div>
 
-    <gestao-usuarios-module v-if="abaAtiva === 'usuarios'"></gestao-usuarios-module>
-
-    <template v-else>
-    <div class="flex flex-col sm:flex-row gap-2 mb-4">
-      <div class="relative flex-1">
-        <input v-model="filtroBusca" type="text" placeholder="Buscar..."
-          class="w-full rounded-lg border border-slate-300 pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M18 10.5a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z"/>
-        </svg>
+    <!-- ==================== ABA: USUÁRIOS / ACESSOS ==================== -->
+    <div v-if="abaAtiva === 'usuarios'" class="space-y-4">
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+        <input v-model="busca" type="text" placeholder="Buscar por nome ou e-mail..."
+          class="w-full sm:max-w-md rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <button v-if="isAdmin" @click="abrirNovoUsuario" class="btn-tap w-full sm:w-auto bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-sm flex items-center justify-center gap-1.5">
+          + Novo Colaborador
+        </button>
       </div>
-      <button v-if="souAdmin" @click="abrirNovo"
-        class="btn-tap bg-sky-600 hover:bg-sky-700 text-white font-semibold px-4 py-2.5 rounded-lg text-sm whitespace-nowrap">
-        + Novo Cadastro
-      </button>
-    </div>
 
-    <div v-if="loading" class="flex justify-center py-8 text-slate-400">
-      <span class="spinner !border-slate-300 !border-t-sky-600"></span>
-    </div>
-    <div v-else-if="erro" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{{ erro }}</div>
-    <div v-else-if="listaFiltrada.length === 0" class="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-400">
-      {{ filtroBusca ? "Nenhum resultado para a busca." : ("Nenhum" + (tipoAtivo.artigo === 'a' ? 'a' : '') + " " + tipoAtivo.singular.toLowerCase() + " cadastrad" + (tipoAtivo.artigo === 'a' ? 'a' : 'o') + " ainda.") }}
-    </div>
-    <div v-else class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
-          <tr>
-            <th class="px-4 py-2.5 text-left">Nome</th>
-            <th v-for="campo in tipoAtivo.campos" :key="campo.chave" class="px-4 py-2.5 text-left whitespace-nowrap">{{ campo.label }}</th>
-            <th class="px-4 py-2.5 text-left">Status</th>
-            <th v-if="souAdmin" class="px-4 py-2.5 text-right">Ações</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          <tr v-for="item in listaFiltrada" :key="item.id" class="hover:bg-slate-50 transition-colors">
-            <td class="px-4 py-3 font-medium text-slate-800">{{ item.nome }}</td>
-            <td v-for="campo in tipoAtivo.campos" :key="campo.chave" class="px-4 py-3 text-slate-600">{{ item[campo.chave] || "-" }}</td>
-            <td class="px-4 py-3">
-              <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
-                :class="item.ativo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-500'">
-                {{ item.ativo !== false ? "Ativo" : "Inativo" }}
-              </span>
-            </td>
-            <td v-if="souAdmin" class="px-4 py-3">
-              <div class="flex items-center justify-end gap-1.5">
-                <button @click="abrirEdicao(item)" title="Editar" class="btn-tap w-7 h-7 flex items-center justify-center rounded-md bg-sky-50 hover:bg-sky-100 text-sky-600 shrink-0">✏️</button>
-                <button @click="alternarAtivo(item)" :title="item.ativo !== false ? 'Inativar' : 'Reativar'" class="btn-tap w-7 h-7 flex items-center justify-center rounded-md bg-amber-50 hover:bg-amber-100 text-amber-600 shrink-0">{{ item.ativo !== false ? "⏸️" : "▶️" }}</button>
-                <button @click="pedirExclusao(item)" title="Excluir" class="btn-tap w-7 h-7 flex items-center justify-center rounded-md bg-red-50 hover:bg-red-100 text-red-600 shrink-0">🗑️</button>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div v-for="u in listaUsuariosFiltrada" :key="u.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+          <div class="flex items-start justify-between">
+            <div>
+              <h4 class="font-extrabold text-slate-800 text-sm">{{ u.nome }}</h4>
+              <p class="text-xs text-slate-400">{{ u.email }}</p>
+              <div class="flex items-center gap-2 mt-1">
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{{ u.cargo }}</span>
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700">{{ u.setor }}</span>
               </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+            <div class="text-right space-y-1">
+              <span class="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase"
+                :class="u.perfil === 'ADMINISTRADOR' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'">
+                {{ u.perfil }}
+              </span>
+              <div>
+                <label class="relative inline-flex items-center cursor-pointer" :title="u.ativo ? 'Clique para desativar' : 'Clique para ativar'">
+                  <input type="checkbox" :checked="u.ativo" @change="alternarStatusUsuario(u)" :disabled="!isAdmin" class="sr-only peer">
+                  <div class="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+            <div class="flex items-center gap-2">
+              <span class="text-slate-400">PIN:</span>
+              <span class="font-mono font-bold text-slate-700">{{ pinsVisiveis[u.id] ? u.pin : '••••' }}</span>
+              <button @click="toggleVerPin(u.id)" class="text-[10px] text-sky-600 hover:underline">
+                {{ pinsVisiveis[u.id] ? 'Ocultar' : 'Mostrar' }}
+              </button>
+            </div>
+            <div class="flex items-center gap-2">
+              <button v-if="isAdmin" @click="abrirEditarUsuario(u)" class="btn-tap text-xs font-semibold text-slate-600 hover:text-sky-600 flex items-center gap-1">
+                ✏️ Editar
+              </button>
+              <button v-if="isAdmin" @click="abrirAlterarPin(u)" class="btn-tap text-xs font-semibold text-sky-600 hover:text-sky-700">
+                🔑 Alterar PIN
+              </button>
+            </div>
+          </div>
+          <p v-if="u.ultimaModificacao" class="text-[10px] text-slate-400 italic">Modificado: {{ u.ultimaModificacao }}</p>
+        </div>
+      </div>
     </div>
 
-    <cadastro-form-modal v-if="modalAberto" :tipo="tipoAtivo" :item-editando="itemEditando" :salvando="salvando"
-      @salvar="salvarItem" @fechar="fecharModal"></cadastro-form-modal>
+    <!-- ==================== ABA: GRUPOS & PERMISSÕES (RBAC) ==================== -->
+    <div v-if="abaAtiva === 'grupos'" class="space-y-4">
+      <div class="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+        <div>
+          <h3 class="font-bold text-slate-800 text-sm">Matriz de Perfis & Privilégios (RBAC)</h3>
+          <p class="text-xs text-slate-400">Defina os níveis de visualização, edição e download para cada perfil.</p>
+        </div>
+        <button v-if="isAdmin" @click="abrirNovoGrupo" class="btn-tap bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-sm">
+          + Criar Novo Grupo
+        </button>
+      </div>
 
-    <div v-if="excluirAlvo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="cancelarExclusao">
-      <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 space-y-4">
-        <h3 class="font-bold text-slate-800">Excluir {{ tipoAtivo.singular.toLowerCase() }}?</h3>
-        <p class="text-sm text-slate-600">Esta ação remove definitivamente <span class="font-semibold">{{ excluirAlvo.nome }}</span> da base de dados. Não pode ser desfeita. Para apenas suspender o uso sem perder o histórico, use "Inativar".</p>
-        <div class="flex gap-2 pt-1">
-          <button @click="cancelarExclusao" :disabled="excluindo" class="btn-tap flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 rounded-lg text-sm">Cancelar</button>
-          <button @click="confirmarExclusao" :disabled="excluindo" class="btn-tap flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg text-sm">
-            <span v-if="excluindo" class="spinner"></span><span>{{ excluindo ? "Excluindo..." : "🗑️ Excluir" }}</span>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div v-for="g in grupos" :key="g.id" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+            <div>
+              <h4 class="font-extrabold text-slate-800 text-sm">{{ g.nome }}</h4>
+              <p v-if="g.atualizadoEm" class="text-[10px] text-slate-400">Atualizado por {{ g.atualizadoPor }}</p>
+            </div>
+            <button v-if="isAdmin" @click="abrirEditarGrupo(g)" class="btn-tap text-xs text-indigo-600 hover:underline font-bold">
+              Configurar Permissões
+            </button>
+          </div>
+
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="text-slate-400 border-b border-slate-100 text-[10px]">
+                <th class="text-left py-1">Módulo</th>
+                <th class="text-center py-1">Ver</th>
+                <th class="text-center py-1">Editar</th>
+                <th class="text-center py-1">Exportar</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in modulosSistema" :key="m.id" class="border-b border-slate-50">
+                <td class="py-1.5 font-medium text-slate-700">{{ m.nome }}</td>
+                <td class="text-center">{{ g.permissoes?.[m.id]?.ver ? '✅' : '❌' }}</td>
+                <td class="text-center">{{ m.permiteEditar ? (g.permissoes?.[m.id]?.editar ? '✅' : '❌') : '—' }}</td>
+                <td class="text-center">{{ m.permiteBaixar ? (g.permissoes?.[m.id]?.baixar ? '✅' : '❌') : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== OUTRAS ABAS (SETORES, EQUIPAMENTOS, FORNECEDORES) ==================== -->
+    <div v-if="abaAtiva === 'setores'" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+      <h4 class="font-bold text-slate-800 text-sm mb-3">Setores Cadastrados</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div v-for="s in setores" :key="s.id || s.Nome" class="p-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700">
+          {{ s.Nome || s.nome }}
+        </div>
+      </div>
+    </div>
+
+    <div v-if="abaAtiva === 'equipamentos'" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+      <h4 class="font-bold text-slate-800 text-sm mb-3">Tipos de Equipamento</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div v-for="t in tiposEquipamento" :key="t.id || t.Nome" class="p-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700">
+          {{ t.Nome || t.nome }}
+        </div>
+      </div>
+    </div>
+
+    <div v-if="abaAtiva === 'fornecedores'" class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+      <h4 class="font-bold text-slate-800 text-sm mb-3">Fornecedores / Laboratórios de Calibração</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div v-for="f in fornecedores" :key="f.id || f.Nome" class="p-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700">
+          {{ f.Nome || f.nome }}
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== MODAL: NOVO / EDITAR COLABORADOR ==================== -->
+    <div v-if="modalUsuarioAberta" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+      <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="font-bold text-slate-800">{{ modoEdicaoUsuario ? 'Editar Colaborador' : 'Novo Colaborador' }}</h3>
+          <button @click="modalUsuarioAberta = false" class="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Nome Completo *</label>
+            <input v-model="usuarioForm.nome" type="text" class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">E-mail Corporativo *</label>
+            <input v-model="usuarioForm.email" type="email" class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Cargo</label>
+              <input v-model="usuarioForm.cargo" type="text" class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500" />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Setor / Área</label>
+              <select v-model="usuarioForm.setor" class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500">
+                <option v-for="s in setores" :key="s.id || s.Nome" :value="s.Nome || s.nome">{{ s.Nome || s.nome }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Perfil de Acesso</label>
+              <select v-model="usuarioForm.perfil" class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500">
+                <option value="COLABORADOR">Colaborador</option>
+                <option value="MANUTENTOR">Manutentor</option>
+                <option value="QUALIDADE">Qualidade</option>
+                <option value="ADMINISTRADOR">Administrador</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">
+                {{ modoEdicaoUsuario ? 'Redefinir PIN (Opcional)' : 'PIN Inicial *' }}
+              </label>
+              <input v-model="usuarioForm.pin" type="password" maxlength="6" :placeholder="modoEdicaoUsuario ? 'Manter atual' : '4 a 6 dígitos'"
+                class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500" />
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+          <button @click="modalUsuarioAberta = false" class="btn-tap px-4 py-2 rounded-lg bg-slate-100 text-slate-600 font-semibold text-xs">Cancelar</button>
+          <button @click="salvarUsuario" :disabled="salvando" class="btn-tap px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs flex items-center gap-1">
+            <span v-if="salvando" class="spinner !w-3 !h-3"></span>
+            <span>{{ salvando ? 'Gravando...' : (modoEdicaoUsuario ? 'Salvar Alterações' : 'Cadastrar') }}</span>
           </button>
         </div>
       </div>
     </div>
-    </template>
+
+    <!-- ==================== MODAL: CONFIGURAR GRUPO (RBAC) ==================== -->
+    <div v-if="modalGrupoAberta" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+      <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="font-bold text-slate-800">Permissões de Acesso por Módulo</h3>
+          <button @click="modalGrupoAberta = false" class="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Nome do Perfil / Grupo *</label>
+          <input v-model="grupoForm.nome" type="text" placeholder="Ex: Técnico de Campo, Auditor ISO"
+            class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-indigo-500" />
+        </div>
+
+        <div class="space-y-2 border border-slate-200 rounded-xl p-3">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="text-slate-500 border-b border-slate-200 text-left">
+                <th class="py-2">Módulo</th>
+                <th class="py-2 text-center">Visualizar</th>
+                <th class="py-2 text-center">Editar / Gravar</th>
+                <th class="py-2 text-center">Exportar PDF</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in modulosSistema" :key="m.id" class="border-b border-slate-100">
+                <td class="py-2.5 font-medium text-slate-700">{{ m.nome }}</td>
+                <td class="py-2.5 text-center">
+                  <input type="checkbox" v-model="grupoForm.permissoes[m.id].ver" class="w-4 h-4 rounded text-indigo-600" />
+                </td>
+                <td class="py-2.5 text-center">
+                  <input v-if="m.permiteEditar" type="checkbox" v-model="grupoForm.permissoes[m.id].editar" class="w-4 h-4 rounded text-indigo-600" />
+                  <span v-else class="text-slate-300">—</span>
+                </td>
+                <td class="py-2.5 text-center">
+                  <input v-if="m.permiteBaixar" type="checkbox" v-model="grupoForm.permissoes[m.id].baixar" class="w-4 h-4 rounded text-indigo-600" />
+                  <span v-else class="text-slate-300">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+          <button @click="modalGrupoAberta = false" class="btn-tap px-4 py-2 rounded-lg bg-slate-100 text-slate-600 font-semibold text-xs">Cancelar</button>
+          <button @click="salvarGrupo" :disabled="salvando" class="btn-tap px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1">
+            <span v-if="salvando" class="spinner !w-3 !h-3"></span>
+            <span>{{ salvando ? 'Gravando...' : 'Salvar Matriz de Permissões' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== MODAL: ALTERAR PIN ==================== -->
+    <div v-if="modalPinAberta" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+      <div class="bg-white w-full max-w-xs rounded-2xl shadow-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-800 text-sm">Alterar PIN: {{ pinForm.nome }}</h3>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Novo PIN (4 a 6 dígitos)</label>
+          <input v-model="pinForm.novoPin" type="password" maxlength="6" class="w-full rounded-lg border border-slate-300 p-2 text-center font-mono text-base focus:ring-2 focus:ring-sky-500" />
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button @click="modalPinAberta = false" class="btn-tap px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs">Cancelar</button>
+          <button @click="salvarPin" :disabled="salvando" class="btn-tap px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs">
+            {{ salvando ? 'Salvando...' : 'Confirmar' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>`
 };
