@@ -83,17 +83,29 @@ async function getInitialData() {
 // segundo plano, via um novo getInitialData().
 async function postToAppsScript(payload) {
   try {
-    await fetch(API_URL, {
+    const res = await fetch(API_URL, {
       method: "POST",
-      mode: "no-cors",
-      redirect: "follow",
+      // text/plain evita requisição preliminar OPTIONS (CORS preflight) no Apps Script
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ empresaId: empresaAtual, ...payload }),
+      body: JSON.stringify(payload)
     });
-    return { status: "success" };
-  } catch (networkErr) {
-    console.error("Erro de rede ao enviar dados:", networkErr);
-    throw networkErr;
+    const resposta = await res.json();
+    console.log("Resposta da gravação no Apps Script:", resposta);
+    return resposta;
+  } catch (err) {
+    console.error("Erro ao salvar no Apps Script:", err);
+    // Fallback: tenta envio form-urlencoded se o fetch direto for barrado
+    try {
+      await fetch(API_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "payload=" + encodeURIComponent(JSON.stringify(payload))
+      });
+      console.log("Enviado via fallback no-cors");
+    } catch (e2) {
+      console.error("Falha no fallback de gravação:", e2);
+    }
   }
 }
 
