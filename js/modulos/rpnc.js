@@ -316,7 +316,7 @@ const AtaDiretoriaModal = {
     const paretoItens = computed(() => {
       const grupos = {};
       props.lista.forEach(r => {
-        const chave = (r.codigo || r.descricao || "Sem identificação").trim();
+        const chave = String(r.codigo || r.descricao || "Sem identificação").trim();
         if (!grupos[chave]) grupos[chave] = { chave, descricao: r.descricao, ocorrencias: 0, custo: 0 };
         grupos[chave].ocorrencias++;
         grupos[chave].custo += prejuizoRnc(r);
@@ -515,8 +515,7 @@ const RncModule = {
       erro.value = "";
       try {
         const data = await getInitialData();
-        const raw = data.rncs || data.RNCs || data.RPNCs || data.rpncs
-          || (data.data && (data.data.rncs || data.data.rpncs)) || [];
+        const raw = data.rpnc || data.RPNC || data.rncs || data.RNCs || data.RPNCs || data.rpncs || (data.data && (data.data.rpnc || data.data.rncs)) || [];
         lista.value = (Array.isArray(raw) ? raw : []).map(normalizeRnc);
       } catch (err) {
         console.error(err);
