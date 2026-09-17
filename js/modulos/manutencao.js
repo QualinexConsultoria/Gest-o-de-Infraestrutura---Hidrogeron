@@ -1,6 +1,7 @@
 /* ==========================================================================
    js/modulos/manutencao.js — Preventiva (RSG-6301-01) e Corretiva (RSG-6302-01/02)
-   Versão Consolidada: Gravação Robusta via POST, Sincronização e Baixa Imediata
+   Versão Consolidada: Observações Gerais, Assinatura Opcional do Supervisor,
+   Assinaturas no Laudo/PDF e Gravação Direta na Planilha via POST.
    ========================================================================== */
 const PRIORIDADES = [
   { value: "Baixa",   color: "bg-blue-100 text-blue-700 border-blue-300" },
@@ -65,7 +66,7 @@ function isStatusChamadoAberto(status) {
    ASSINATURA DIGITAL EM TELA
    ========================================================================== */
 const AssinaturaCanvas = {
-  props: { label: String },
+  props: { label: String, required: Boolean },
   emits: ["update"],
   setup(props, { emit }) {
     const canvasRef = ref(null);
@@ -113,7 +114,7 @@ const AssinaturaCanvas = {
       const c = canvasRef.value;
       const dpr = window.devicePixelRatio || 1;
       c.width = c.clientWidth * dpr;
-      c.height = 150 * dpr;
+      c.height = 130 * dpr;
       ctx = c.getContext("2d");
       ctx.scale(dpr, dpr);
       ctx.strokeStyle = "#1e293b";
@@ -127,13 +128,15 @@ const AssinaturaCanvas = {
   template: `
   <div>
     <div class="flex items-center justify-between mb-1">
-      <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ label }} *</label>
+      <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
+        {{ label }} <span v-if="required" class="text-rose-500">*</span>
+      </label>
       <button type="button" @click="limpar" class="text-xs text-sky-600 font-semibold btn-tap">Limpar</button>
     </div>
     <canvas ref="canvasRef"
       class="w-full block bg-white border-2 rounded-lg touch-none cursor-crosshair"
       :class="temTraco ? 'border-emerald-300' : 'border-dashed border-slate-300'"
-      style="height:150px"
+      style="height:130px"
       @mousedown="iniciarTraco" @mousemove="continuarTraco" @mouseup="finalizarTraco" @mouseleave="finalizarTraco"
       @touchstart="iniciarTraco" @touchmove="continuarTraco" @touchend="finalizarTraco"></canvas>
     <p v-if="!temTraco" class="text-[11px] text-slate-400 mt-1">Assine com o dedo ou mouse na área acima.</p>
@@ -248,7 +251,7 @@ function corPeriodicidadeItem(p) {
 }
 
 /* ==========================================================================
-   LAUDO PREVENTIVA (RSG-6301-01)
+   LAUDO PREVENTIVA (RSG-6301-01) — COM RENDERIZAÇÃO REAL DAS ASSINATURAS
    ========================================================================== */
 const RSG_TITULO = "RSG-6301-01 - Checklist Manutenção Preventiva";
 
@@ -286,10 +289,10 @@ const LaudoPreventivaModal = {
       exportandoPdf.value = true;
       const doc = new window.jspdf.jsPDF("p", "pt", "a4");
       doc.html(el, {
-        margin: [24, 24, 24, 24],
+        margin: [20, 20, 20, 20],
         autoPaging: "text",
         html2canvas: { scale: 0.72, useCORS: true, backgroundColor: "#ffffff" },
-        width: 547,
+        width: 555,
         windowWidth: el.scrollWidth || 780,
         callback: (d) => {
           d.save(`RSG-6301-01_${props.laudo?.idLog || "preventiva"}.pdf`);
@@ -308,47 +311,81 @@ const LaudoPreventivaModal = {
         <button v-if="!modoPosSalvar" @click="$emit('fechar')" class="text-slate-400 hover:text-slate-600 text-xl px-2">✕</button>
       </div>
 
-      <div id="laudo-imprimivel" class="p-5 space-y-4" v-if="laudo">
+      <div id="laudo-imprimivel" class="p-6 space-y-4" v-if="laudo">
+        <!-- Cabeçalho -->
         <div class="border-b-2 border-slate-800 pb-3">
           <p class="text-xs font-bold text-sky-700 uppercase tracking-wide">Hidrogeron - Sistema de Manutenção</p>
           <h2 class="text-lg font-extrabold text-slate-900 mt-0.5">{{ RSG_TITULO }}</h2>
           <div class="grid grid-cols-2 gap-2 mt-2 text-xs text-slate-500">
-            <p><span class="font-semibold text-slate-700">Protocolo:</span> #{{ laudo.idLog }}</p>
+            <p><span class="font-semibold text-slate-700">Protocolo/Log ID:</span> #{{ laudo.idLog }}</p>
             <p><span class="font-semibold text-slate-700">Data/Hora:</span> {{ formatarDataHora(laudo.dataHora) }}</p>
           </div>
         </div>
 
+        <!-- Dados do Ativo -->
         <div class="bg-slate-50 rounded-lg border border-slate-200 p-3 text-sm grid grid-cols-2 gap-2">
-          <p><span class="text-slate-400">Área:</span> <strong>{{ laudo.area }}</strong></p>
+          <p><span class="text-slate-400">Setor/Área:</span> <strong>{{ laudo.area }}</strong></p>
           <p><span class="text-slate-400">Equipamento:</span> <strong>{{ laudo.equipamentoNome }}</strong></p>
-          <p><span class="text-slate-400">Inspetor:</span> {{ laudo.inspetor }}</p>
+          <p><span class="text-slate-400">Executor/Inspetor:</span> {{ laudo.inspetor }}</p>
           <p><span class="text-slate-400">Status Geral:</span> <strong :class="laudo.statusGeral === 'Não Conforme' ? 'text-rose-600' : 'text-emerald-600'">{{ laudo.statusGeral }}</strong></p>
         </div>
 
-        <div class="border border-slate-200 rounded-lg overflow-hidden">
-          <table class="w-full text-xs border-collapse">
-            <thead>
-              <tr class="bg-slate-100 text-slate-600 text-[10px] uppercase">
-                <th class="text-left p-2 border">Item de Inspeção</th>
-                <th class="text-center p-2 border w-24">Condição</th>
-                <th class="text-left p-2 border">Observações</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(item, idx) in laudo.itens" :key="idx">
-                <td class="p-2 border">{{ item.texto }}</td>
-                <td class="p-2 border text-center font-bold">
-                  <span class="px-2 py-0.5 rounded-full" :class="condicaoInfo(item.status).classe">{{ formatarStatusItem(item.status) }}</span>
-                </td>
-                <td class="p-2 border text-slate-600">{{ item.observacao || '-' }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Matriz de Itens -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">Matriz de Verificação</h4>
+          <div class="border border-slate-200 rounded-lg overflow-hidden">
+            <table class="w-full text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-100 text-slate-600 text-[10px] uppercase">
+                  <th class="text-left p-2 border border-slate-200">Item de Inspeção</th>
+                  <th class="text-center p-2 border border-slate-200 w-24">Condição</th>
+                  <th class="text-left p-2 border border-slate-200">Observações / Desvios</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(item, idx) in laudo.itens" :key="idx">
+                  <td class="p-2 border border-slate-200 text-slate-700">{{ item.texto }}</td>
+                  <td class="p-2 border border-slate-200 text-center font-bold">
+                    <span class="px-2 py-0.5 rounded-full" :class="condicaoInfo(item.status).classe">{{ formatarStatusItem(item.status) }}</span>
+                  </td>
+                  <td class="p-2 border border-slate-200 text-slate-600">{{ item.observacao || '-' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div v-if="laudo.observacoes">
-          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Observações</h4>
-          <p class="bg-slate-50 rounded-lg border p-2.5 text-xs text-slate-700">{{ laudo.observacoes }}</p>
+        <!-- Observações Gerais Registradas -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Observações e Apontamentos</h4>
+          <p class="bg-slate-50 rounded-lg border border-slate-200 p-3 text-xs text-slate-700 whitespace-pre-line">
+            {{ laudo.observacoes || 'Nenhuma observação adicional.' }}
+          </p>
+        </div>
+
+        <!-- Rodapé de Validação e Assinaturas -->
+        <div class="pt-4 border-t border-slate-200">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Validação & Responsabilidade</h4>
+          <div class="grid grid-cols-2 gap-6 text-xs text-slate-500">
+            <div>
+              <div class="h-16 flex items-end justify-center pb-1 border-b border-slate-400 bg-slate-50/50 rounded-t">
+                <img v-if="laudo.assinaturaInspetor" :src="laudo.assinaturaInspetor" class="h-14 object-contain" alt="Assinatura Inspetor" />
+                <span v-else class="text-slate-300 italic text-[11px] mb-2">(Assinatura não coletada)</span>
+              </div>
+              <p class="mt-1 font-semibold text-slate-700 text-center">Técnico / Inspetor Responsável</p>
+              <p class="mt-1 text-center text-slate-600 font-medium">{{ laudo.inspetor || '-' }}</p>
+              <p class="text-center text-[11px] text-slate-400 mt-0.5">Data: {{ formatarDataHora(laudo.dataHora) }}</p>
+            </div>
+            <div>
+              <div class="h-16 flex items-end justify-center pb-1 border-b border-slate-400 bg-slate-50/50 rounded-t">
+                <img v-if="laudo.assinaturaSupervisor" :src="laudo.assinaturaSupervisor" class="h-14 object-contain" alt="Assinatura Supervisor" />
+                <span v-else class="text-slate-300 italic text-[11px] mb-2">(Assinatura não coletada)</span>
+              </div>
+              <p class="mt-1 font-semibold text-slate-700 text-center">Supervisão / Gestão da Área</p>
+              <p class="mt-1 text-center text-slate-600 font-medium">{{ laudo.assinaturaSupervisorNome || 'Não informado' }}</p>
+              <p class="text-center text-[11px] text-slate-400 mt-0.5">Data: {{ laudo.assinaturaSupervisor ? formatarDataHora(laudo.dataHora) : '—' }}</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -582,7 +619,7 @@ const PreventivaModule = {
     function removerFotoItem(item) { item.fotoBase64 = null; item.fotoNome = ""; }
 
     /* ======================================================================
-       GRAVAÇÃO DEFINITIVA — POST COM BYPASS TOTAL E SUCESSO GARANTIDO
+       GRAVAÇÃO COM SUPERVISOR OPCIONAL E ASSINATURAS NO LAUDO
        ====================================================================== */
     async function salvarInspecao() {
       const pendentes = itensChecklist.value.filter(i => !i.status);
@@ -592,10 +629,11 @@ const PreventivaModule = {
       const ncSemDescricao = itensChecklist.value.some(i => i.status === "NC" && !i.observacao.trim());
       if (ncSemDescricao) return pushToast("Descreva o desvio nos itens Não Conformes.", "error");
 
-      if (!nomeExecutor.value.trim()) return pushToast("Informe o nome do executor.", "error");
-      if (!assinaturaInspetor.value) return pushToast("Colete a assinatura do inspetor.", "error");
-      if (!assinaturaSupervisor.value || !assinaturaSupervisorNome.value.trim()) {
-        return pushToast("Colete o nome e assinatura do supervisor.", "error");
+      if (!nomeExecutor.value.trim()) return pushToast("Informe o nome de quem executou a inspeção.", "error");
+      
+      // Validação obrigatória APENAS de quem inspecionou
+      if (!assinaturaInspetor.value) {
+        return pushToast("Colete a assinatura do técnico/inspetor responsável.", "error");
       }
 
       salvando.value = true;
@@ -617,7 +655,7 @@ const PreventivaModule = {
         const areaAtual = areaSelecionada.value;
         const usuarioNome = nomeExecutor.value.trim();
 
-        // 1. GRAVAÇÃO ROBUSTA NO APPS SCRIPT VIA POST
+        // 1. Gravação no Google Sheets (POST)
         const payloadPost = {
           action: "savePreventiva",
           idLog: idLog,
@@ -632,7 +670,7 @@ const PreventivaModule = {
 
         await postToAppsScript(payloadPost);
 
-        // 2. ATUALIZAÇÃO IMEDIATA DO HISTÓRICO LOCAL (BAIXA A PENDÊNCIA NA HORA)
+        // 2. Atualização imediata no estado local
         const novoLog = {
           id: idLog,
           data: dataHora,
@@ -645,21 +683,27 @@ const PreventivaModule = {
         };
         preventivasHistorico.value.unshift(novoLog);
 
-        pushToast("Inspeção gravada na planilha com sucesso!", "success");
+        pushToast("Inspeção gravada com sucesso!", "success");
 
-        // Abre o laudo para conferência
+        // 3. Monta o Laudo completo com as assinaturas para exibição e PDF
         laudoAtual.value = {
-          idLog, dataHora, area: areaAtual,
+          idLog,
+          dataHora,
+          area: areaAtual,
           equipamentoIdDisplay: equipamentoSelecionado.value.idDisplay,
-          equipamentoNome, modelo: equipamentoSelecionado.value.modelo,
-          inspetor: usuarioNome, statusGeral: statusInspecao,
+          equipamentoNome,
+          modelo: equipamentoSelecionado.value.modelo,
+          inspetor: usuarioNome,
+          statusGeral: statusInspecao,
           itens: itensChecklist.value.map(i => ({ texto: i.texto, status: i.status, observacao: i.observacao })),
-          observacoes: observacoesFinal
+          observacoes: observacoesFinal,
+          assinaturaInspetor: assinaturaInspetor.value,
+          assinaturaSupervisor: assinaturaSupervisor.value,
+          assinaturaSupervisorNome: assinaturaSupervisorNome.value.trim()
         };
         laudoModoPosSalvar.value = true;
         laudoAberto.value = true;
 
-        // 3. RECÁLCULO SILENCIOSO EM 2 SEGUNDOS
         setTimeout(() => carregarDados({ silencioso: true }), 2000);
 
       } catch (err) {
@@ -762,7 +806,7 @@ const PreventivaModule = {
 
       <div class="bg-white rounded-xl border border-slate-200 p-4">
         <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Executor / Inspetor *</label>
-        <input v-model="nomeExecutor" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <input v-model="nomeExecutor" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500" />
       </div>
 
       <div class="space-y-3">
@@ -775,16 +819,31 @@ const PreventivaModule = {
               <button @click="setItemStatus(item, 'NA')" class="py-2 rounded-lg font-bold text-sm border-2" :class="item.status === 'NA' ? 'bg-slate-500 border-slate-500 text-white' : 'bg-slate-100 text-slate-600'">- NA</button>
             </div>
             <div v-if="item.status === 'NC'" class="mt-3 space-y-2">
-              <textarea v-model="item.observacao" placeholder="Descreva o desvio encontrado..." class="w-full border rounded-lg p-2 text-xs"></textarea>
+              <textarea v-model="item.observacao" placeholder="Descreva o desvio encontrado..." class="w-full border rounded-lg p-2 text-xs focus:ring-2 focus:ring-red-500"></textarea>
             </div>
           </div>
         </template>
 
-        <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-          <h4 class="text-xs font-bold text-slate-500 uppercase">✍️ Assinaturas</h4>
-          <assinatura-canvas label="Assinatura do Técnico / Inspetor" @update="onAssinaturaInspetor"></assinatura-canvas>
-          <input v-model="assinaturaSupervisorNome" type="text" placeholder="Nome do Supervisor" class="w-full border rounded-lg p-2 text-xs" />
-          <assinatura-canvas label="Assinatura do Supervisor" @update="onAssinaturaSupervisor"></assinatura-canvas>
+        <!-- Campo de Observações Gerais Restaurado -->
+        <div class="bg-white rounded-xl border border-slate-200 p-4">
+          <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Observações Gerais (Opcional)</label>
+          <textarea v-model="observacoesGerais" rows="3" placeholder="Informações complementares, anomalias, solicitações ou apontamentos sobre o equipamento..."
+            class="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:ring-2 focus:ring-sky-500"></textarea>
+        </div>
+
+        <!-- Assinaturas (Inspetor Obrigatório, Supervisor Opcional) -->
+        <div class="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide">✍️ Assinaturas</h4>
+          
+          <assinatura-canvas label="Assinatura do Técnico / Inspetor" :required="true" @update="onAssinaturaInspetor"></assinatura-canvas>
+          
+          <div class="pt-2 border-t border-slate-100 space-y-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Nome do Supervisor (Opcional)</label>
+              <input v-model="assinaturaSupervisorNome" type="text" placeholder="Nome do supervisor ou deixe em branco" class="w-full border border-slate-300 rounded-lg p-2 text-xs focus:ring-2 focus:ring-sky-500" />
+            </div>
+            <assinatura-canvas label="Assinatura do Supervisor (Opcional)" :required="false" @update="onAssinaturaSupervisor"></assinatura-canvas>
+          </div>
         </div>
 
         <button @click="salvarInspecao" :disabled="salvando" class="btn-tap w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3.5 rounded-xl shadow-md">
