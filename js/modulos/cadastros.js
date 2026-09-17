@@ -14,7 +14,7 @@ const MODULOS_SISTEMA = [
   { id: "cadastros", nome: "Central de Cadastros", permiteEditar: true, permiteBaixar: false }
 ];
 
-const CadastrosModule = {
+const CadastrosMestresModule = {
   props: { user: Object },
   emits: ["go-home"],
   setup(props) {
@@ -594,3 +594,4 @@ const CadastrosModule = {
     </div>
   </div>`
 };
+window.CadastrosMestresModule = CadastrosMestresModule;
