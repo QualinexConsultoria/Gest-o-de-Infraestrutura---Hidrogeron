@@ -14,6 +14,35 @@ const MODULOS_SISTEMA = [
   { id: "cadastros", nome: "Central de Cadastros", permiteEditar: true, permiteBaixar: false }
 ];
 
+// Estado global em memória para prover dados rápidos a outros módulos
+window._cacheCadastrosMestres = window._cacheCadastrosMestres || {
+  setores: [],
+  tiposEquipamento: [],
+  fornecedores: [],
+  pessoas: [],
+  usuarios: [],
+  grupos: []
+};
+
+// Função global de sincronização chamada pelos módulos dependentes
+window.carregarCadastrosMestres = async function(forcar) {
+  try {
+    if (!forcar && window._cacheCadastrosMestres.setores && window._cacheCadastrosMestres.setores.length > 0) {
+      return window._cacheCadastrosMestres;
+    }
+    const data = await getInitialData();
+    window._cacheCadastrosMestres.setores = data.setores || [];
+    window._cacheCadastrosMestres.tiposEquipamento = data.tiposEquipamento || [];
+    window._cacheCadastrosMestres.fornecedores = data.fornecedores || [];
+    window._cacheCadastrosMestres.pessoas = data.pessoas || [];
+    window._cacheCadastrosMestres.usuarios = data.usuarios || [];
+    return window._cacheCadastrosMestres;
+  } catch (e) {
+    console.error("Falha ao sincronizar carregarCadastrosMestres:", e);
+    return window._cacheCadastrosMestres;
+  }
+};
+
 const CadastrosMestresModule = {
   props: { user: Object },
   emits: ["go-home"],
@@ -23,7 +52,7 @@ const CadastrosMestresModule = {
     const loading = ref(false);
     const salvando = ref(false);
 
-    // Listas carregadas
+    // Listas locais
     const setores = ref([]);
     const tiposEquipamento = ref([]);
     const fornecedores = ref([]);
@@ -91,6 +120,13 @@ const CadastrosMestresModule = {
           pin: u.PIN || "",
           ultimaModificacao: u.Ultima_Modificacao || u.ultimaModificacao || ""
         }));
+
+        // Atualiza cache global
+        window._cacheCadastrosMestres.setores = setores.value;
+        window._cacheCadastrosMestres.tiposEquipamento = tiposEquipamento.value;
+        window._cacheCadastrosMestres.fornecedores = fornecedores.value;
+        window._cacheCadastrosMestres.pessoas = pessoas.value;
+        window._cacheCadastrosMestres.usuarios = usuarios.value;
 
         // Carrega grupos de permissão da Config_Cadastros
         const cadastros = data.cadastros || [];
@@ -596,13 +632,13 @@ const CadastrosMestresModule = {
   </div>`
 };
 
-// Registro explícito no escopo global
+// ============================================================================
+// REGISTRO GLOBAL DE COMPONENTES E COMPATIBILIDADE DE ROTAS
+// ============================================================================
 window.CadastrosMestresModule = CadastrosMestresModule;
 window.CadastrosModule = CadastrosMestresModule;
 
-// ============================================================================
-// Utilitários Globais de Resolução de Nomes (Compatibilidade Cross-Module)
-// ============================================================================
+// Utilitário para os módulos extraírem listas de nomes
 window.nomesCadastro = function(lista, campo) {
   if (!Array.isArray(lista)) return [];
   var chave = campo || "Nome";
@@ -613,6 +649,7 @@ window.nomesCadastro = function(lista, campo) {
   }).filter(function(v) { return v.length > 0; });
 };
 
+// Funções de resolução individual
 window.obterNomeSetor = function(idOuNome, setores) {
   if (!Array.isArray(setores)) return idOuNome || "";
   var item = setores.find(function(x) {
