@@ -60,7 +60,7 @@ const CadastrosMestresModule = {
     });
 
     const isAdmin = computed(() => {
-      const p = (props.user && props.user.perfil || "").toUpperCase();
+      const p = (props.user && props.user.perfil || props.user?.Funcao || "").toUpperCase();
       return p === "ADMINISTRADOR" || p === "ADMIN";
     });
 
@@ -109,7 +109,7 @@ const CadastrosMestresModule = {
           });
       } catch (err) {
         console.error("Erro ao carregar cadastros:", err);
-        pushToast("Erro ao sincronizar base de cadastros.", "error");
+        if (typeof pushToast === "function") pushToast("Erro ao sincronizar base de cadastros.", "error");
       } finally {
         loading.value = false;
       }
@@ -143,22 +143,21 @@ const CadastrosMestresModule = {
         cargo: u.cargo,
         setor: u.setor || "Uso Geral",
         perfil: u.perfil || "COLABORADOR",
-        pin: "", // Deixa vazio para só alterar se preenchido
+        pin: "",
         ativo: u.ativo
       });
       modalUsuarioAberta.value = true;
     }
 
     async function salvarUsuario() {
-      if (!usuarioForm.nome.trim()) return pushToast("Informe o nome completo.", "error");
-      if (!usuarioForm.email.trim()) return pushToast("Informe o e-mail.", "error");
-      if (!modoEdicaoUsuario.value && !usuarioForm.pin) return pushToast("Defina o PIN inicial de 4 a 6 dígitos.", "error");
+      if (!usuarioForm.nome.trim()) return pushToast && pushToast("Informe o nome completo.", "error");
+      if (!usuarioForm.email.trim()) return pushToast && pushToast("Informe o e-mail.", "error");
+      if (!modoEdicaoUsuario.value && !usuarioForm.pin) return pushToast && pushToast("Defina o PIN inicial de 4 a 6 dígitos.", "error");
 
-      // Proteção de Auto-Bloqueio
       if (modoEdicaoUsuario.value && usuarioForm.perfil !== "ADMINISTRADOR") {
         const itemOriginal = usuarios.value.find(u => u.id === usuarioForm.id);
         if (itemOriginal && (itemOriginal.perfil === "ADMINISTRADOR" || itemOriginal.perfil === "ADMIN") && totalAdminsAtivos.value <= 1) {
-          return pushToast("Ação bloqueada: o sistema precisa manter ao menos 1 Administrador ativo.", "error");
+          return pushToast && pushToast("Ação bloqueada: o sistema precisa manter ao menos 1 Administrador ativo.", "error");
         }
       }
 
@@ -174,16 +173,18 @@ const CadastrosMestresModule = {
           Setor: usuarioForm.setor,
           Funcao: usuarioForm.perfil,
           Status: usuarioForm.ativo ? "Ativo" : "Inativo",
-          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || "Admin"}`
+          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || props.user?.Nome || "Admin"}`
         };
 
         await apiPost(payload);
-        pushToast(modoEdicaoUsuario.value ? "Colaborador atualizado com sucesso!" : "Novo colaborador cadastrado!", "success");
+        if (typeof pushToast === "function") {
+          pushToast(modoEdicaoUsuario.value ? "Colaborador atualizado com sucesso!" : "Novo colaborador cadastrado!", "success");
+        }
         modalUsuarioAberta.value = false;
         await carregarTudo();
       } catch (err) {
         console.error(err);
-        pushToast("Erro ao gravar dados do colaborador.", "error");
+        if (typeof pushToast === "function") pushToast("Erro ao gravar dados do colaborador.", "error");
       } finally {
         salvando.value = false;
       }
@@ -192,7 +193,7 @@ const CadastrosMestresModule = {
     async function alternarStatusUsuario(u) {
       if (!isAdmin.value) return;
       if (u.ativo && (u.perfil === "ADMINISTRADOR" || u.perfil === "ADMIN") && totalAdminsAtivos.value <= 1) {
-        return pushToast("Não é permitido inativar o único Administrador ativo do sistema.", "error");
+        return pushToast && pushToast("Não é permitido inativar o único Administrador ativo do sistema.", "error");
       }
 
       const novoStatus = !u.ativo;
@@ -201,12 +202,12 @@ const CadastrosMestresModule = {
           action: "saveUsuario",
           id: u.id || u.PIN,
           Status: novoStatus ? "Ativo" : "Inativo",
-          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || "Admin"}`
+          Ultima_Modificacao: `${new Date().toLocaleDateString("pt-BR")} por ${props.user?.nome || props.user?.Nome || "Admin"}`
         });
         u.ativo = novoStatus;
-        pushToast(`Status de ${u.nome} atualizado para ${novoStatus ? "Ativo" : "Inativo"}.`, "success");
+        if (typeof pushToast === "function") pushToast(`Status de ${u.nome} atualizado.`, "success");
       } catch (e) {
-        pushToast("Erro ao alterar status do usuário.", "error");
+        if (typeof pushToast === "function") pushToast("Erro ao alterar status.", "error");
       }
     }
 
@@ -217,16 +218,16 @@ const CadastrosMestresModule = {
 
     async function salvarPin() {
       if (!pinForm.novoPin || pinForm.novoPin.length < 4) {
-        return pushToast("O PIN deve ter no mínimo 4 dígitos numéricos.", "error");
+        return pushToast && pushToast("O PIN deve ter no mínimo 4 dígitos numéricos.", "error");
       }
       salvando.value = true;
       try {
         await apiPost({ action: "saveUsuario", id: pinForm.id, PIN: pinForm.novoPin });
-        pushToast("PIN redefinido com sucesso!", "success");
+        if (typeof pushToast === "function") pushToast("PIN redefinido com sucesso!", "success");
         modalPinAberta.value = false;
         await carregarTudo();
       } catch (e) {
-        pushToast("Erro ao atualizar o PIN.", "error");
+        if (typeof pushToast === "function") pushToast("Erro ao atualizar PIN.", "error");
       } finally {
         salvando.value = false;
       }
@@ -268,7 +269,7 @@ const CadastrosMestresModule = {
     }
 
     async function salvarGrupo() {
-      if (!grupoForm.nome.trim()) return pushToast("Dê um nome ao grupo de permissões.", "error");
+      if (!grupoForm.nome.trim()) return pushToast && pushToast("Dê um nome ao grupo de permissões.", "error");
       salvando.value = true;
       try {
         const payload = {
@@ -277,16 +278,16 @@ const CadastrosMestresModule = {
           id: grupoForm.id,
           nome: grupoForm.nome.trim(),
           permissoes: grupoForm.permissoes,
-          atualizadoPor: props.user?.nome || "Admin",
+          atualizadoPor: props.user?.nome || props.user?.Nome || "Admin",
           atualizadoEm: new Date().toISOString()
         };
         await apiPost(payload);
-        pushToast("Grupo e matriz de permissões atualizados!", "success");
+        if (typeof pushToast === "function") pushToast("Matriz de permissões salva!", "success");
         modalGrupoAberta.value = false;
         await carregarTudo();
       } catch (err) {
         console.error(err);
-        pushToast("Erro ao gravar perfil de acesso.", "error");
+        if (typeof pushToast === "function") pushToast("Erro ao gravar permissões.", "error");
       } finally {
         salvando.value = false;
       }
@@ -313,19 +314,19 @@ const CadastrosMestresModule = {
     <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
       <button @click="abaAtiva = 'setores'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
         :class="abaAtiva === 'setores' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
-        🏭 Setores / Áreas
+        Setores / Áreas
       </button>
       <button @click="abaAtiva = 'equipamentos'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
         :class="abaAtiva === 'equipamentos' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
-        ⚙️ Tipos de Equipamentos
+        Tipos de Equipamentos
       </button>
       <button @click="abaAtiva = 'fornecedores'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
         :class="abaAtiva === 'fornecedores' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
-        🏢 Fornecedores / Laboratórios
+        Fornecedores / Laboratórios
       </button>
       <button @click="abaAtiva = 'usuarios'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
         :class="abaAtiva === 'usuarios' ? 'bg-sky-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
-        👥 Usuários / Acessos
+        Usuários / Acessos
       </button>
       <button @click="abaAtiva = 'grupos'" class="btn-tap px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
         :class="abaAtiva === 'grupos' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'">
@@ -360,7 +361,7 @@ const CadastrosMestresModule = {
                 {{ u.perfil }}
               </span>
               <div>
-                <label class="relative inline-flex items-center cursor-pointer" :title="u.ativo ? 'Clique para desativar' : 'Clique para ativar'">
+                <label class="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" :checked="u.ativo" @change="alternarStatusUsuario(u)" :disabled="!isAdmin" class="sr-only peer">
                   <div class="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
                 </label>
@@ -594,4 +595,36 @@ const CadastrosMestresModule = {
     </div>
   </div>`
 };
+
+// Registro explícito no escopo global
 window.CadastrosMestresModule = CadastrosMestresModule;
+window.CadastrosModule = CadastrosMestresModule;
+
+// ============================================================================
+// Utilitários Globais de Resolução de Nomes (Compatibilidade Cross-Module)
+// ============================================================================
+window.nomesCadastro = function(lista, campo) {
+  if (!Array.isArray(lista)) return [];
+  var chave = campo || "Nome";
+  return lista.map(function(item) {
+    if (typeof item === "string") return item.trim();
+    if (!item || typeof item !== "object") return "";
+    return (item[chave] || item.Nome || item.nome || item.descricao || item.ID || "").trim();
+  }).filter(function(v) { return v.length > 0; });
+};
+
+window.obterNomeSetor = function(idOuNome, setores) {
+  if (!Array.isArray(setores)) return idOuNome || "";
+  var item = setores.find(function(x) {
+    return String(x.id || x.ID || x.Nome || x.nome || "").trim().toLowerCase() === String(idOuNome || "").trim().toLowerCase();
+  });
+  return item ? (item.Nome || item.nome || idOuNome) : (idOuNome || "");
+};
+
+window.obterNomeResponsavel = function(idOuPin, pessoas) {
+  if (!Array.isArray(pessoas)) return idOuPin || "";
+  var item = pessoas.find(function(x) {
+    return String(x.id || x.PIN || x.ID || x.Nome || x.nome || "").trim().toLowerCase() === String(idOuPin || "").trim().toLowerCase();
+  });
+  return item ? (item.Nome || item.nome || idOuPin) : (idOuPin || "");
+};
