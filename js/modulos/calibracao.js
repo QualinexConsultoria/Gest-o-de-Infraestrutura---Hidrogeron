@@ -50,27 +50,27 @@ var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
 var extrairIdCalibracaoDoHash = window.extrairIdCalibracaoDoHash;
 
 /* ==========================================================================
-   NORMALIZAÇÃO DE DADOS — MAPEAMENTO COMPLETO DA PLANILHA
+   NORMALIZAÇÃO DE DADOS (LEITURA DA PLANILHA)
    ========================================================================== */
 function normalizeCalibracao(c) {
-  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || "").toString().trim();
-  var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim();
-  var instNome = c.Instrumento || c.instrumento || c.Equipamento || c.equipamento || c.Nome || c.Descricao || "Instrumento";
-  var modelo = c.Marca_Modelo || c.marca_modelo || c.Modelo || c.modelo || "";
-  var capacidade = c.Capacidade || c.capacidade || "";
-  var criterio = c.Criterio_Aceitacao || c.criterio_aceitacao || c.Criterio || "";
-  var numSerie = c.Numero_Serie || c.numero_serie || c.Serie || "";
-  var certRbc = c.Certificado_RBC || c.certificado_rbc || c.Certificado || c.Numero_Certificado || "";
-  var laboratorio = c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || c.Orgao_Calibrador || "";
-  var setor = c.Setor || c.setor || "Geral";
-  var operador = c.Operador_Responsavel || c.operador_responsavel || c.Operador || c.responsavel || c.Responsavel || "";
+  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || "").toString().trim().toUpperCase();
+  var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim().toUpperCase();
+  var instNome = (c.Instrumento || c.instrumento || c.Equipamento || c.equipamento || c.Nome || c.Descricao || "INSTRUMENTO").toString().trim().toUpperCase();
+  var modelo = (c.Marca_Modelo || c.marca_modelo || c.Modelo || c.modelo || "").toString().trim().toUpperCase();
+  var capacidade = (c.Capacidade || c.capacidade || "").toString().trim().toUpperCase();
+  var criterio = (c.Criterio_Aceitacao || c.criterio_aceitacao || c.Criterio || "").toString().trim().toUpperCase();
+  var numSerie = (c.Numero_Serie || c.numero_serie || c.Serie || "").toString().trim().toUpperCase();
+  var certRbc = (c.Certificado_RBC || c.certificado_rbc || c.Certificado || c.Numero_Certificado || "").toString().trim().toUpperCase();
+  var laboratorio = (c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || "").toString().trim().toUpperCase();
+  var setor = (c.Setor || c.setor || "GERAL").toString().trim().toUpperCase();
+  var operador = (c.Operador_Responsavel || c.operador_responsavel || c.Operador || c.responsavel || c.Responsavel || "").toString().trim().toUpperCase();
   
   var dtCal = c.Data_Calibracao || c.data_calibracao || c.Data_Ultima_Calibracao || "";
   var vencCal = c.Vencimento_Calibracao || c.vencimento_calibracao || c.Data_Proxima_Calibracao || "";
   var dtChec = c.Data_Checagem || c.data_checagem || "";
   var vencChec = c.Vencimento_Checagem || c.vencimento_checagem || "";
-  var status = c.Status || c.status || "No Prazo";
-  var obs = c.Observacoes || c.observacoes || "";
+  var status = (c.Status || c.status || "NO PRAZO").toString().trim();
+  var obs = (c.Observacoes || c.observacoes || "").toString().trim().toUpperCase();
 
   return {
     id: id,
@@ -107,9 +107,10 @@ const FichaInstrumentoModal = {
     }
 
     function badgeClasse(st) {
-      if (st === "No Prazo") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-      if (st === "Atenção (< 45d)") return "bg-amber-50 text-amber-700 border-amber-200";
-      if (st === "Vencido") return "bg-rose-50 text-rose-700 border-rose-200";
+      var s = String(st || "").toLowerCase();
+      if (s.indexOf("prazo") !== -1) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      if (s.indexOf("aten") !== -1) return "bg-amber-50 text-amber-700 border-amber-200";
+      if (s.indexOf("venc") !== -1) return "bg-rose-50 text-rose-700 border-rose-200";
       return "bg-sky-50 text-sky-700 border-sky-200";
     }
 
@@ -163,7 +164,7 @@ const FichaInstrumentoModal = {
             <p><strong>Critério Aceitação:</strong> {{ instrumento.criterioAceitacao || '—' }}</p>
             <p><strong>Nº de Série:</strong> {{ instrumento.numeroSerie || '—' }}</p>
             <p><strong>Certificado RBC:</strong> {{ instrumento.certificadoRbc || '—' }}</p>
-            <p><strong>Laboratório / Fornecedor:</strong> {{ instrumento.laboratorio || '—' }}</p>
+            <p><strong>Laboratório / Forn.:</strong> {{ instrumento.laboratorio || '—' }}</p>
             <p><strong>Última Checagem:</strong> {{ formatarData(instrumento.dataChecagem) }}</p>
             <p class="col-span-2"><strong>Vencimento Checagem:</strong> {{ formatarData(instrumento.vencimentoChecagem) }}</p>
           </div>
@@ -259,7 +260,7 @@ const CalibracaoModule = {
         props.user?.email ||
         window.userLogado?.nome ||
         "EDUARDO"
-      );
+      ).toString().trim().toUpperCase();
     }
 
     const form = reactive({
@@ -300,7 +301,7 @@ const CalibracaoModule = {
         instrumentos.value.forEach(i => { if (i.setor) sSet.add(i.setor); });
         const setoresBase = base.setores || [];
         if (Array.isArray(setoresBase)) {
-          setoresBase.forEach(s => sSet.add(s.Nome || s.nome || s));
+          setoresBase.forEach(s => sSet.add(String(s.Nome || s.nome || s).toUpperCase()));
         }
         setoresDisponiveis.value = Array.from(sSet).filter(Boolean);
 
@@ -350,7 +351,7 @@ const CalibracaoModule = {
     function abrirNovo() {
       editando.value = false;
       Object.assign(form, {
-        id: "CAL-" + Date.now(),
+        id: "",
         tag: "",
         instrumento: "",
         modelo: "",
@@ -405,66 +406,68 @@ const CalibracaoModule = {
         const payload = {
           action: "saveCadastro",
           tipo: "calibracao_instrumento",
-          id: form.id || form.tag.trim(),
-          tag: form.tag.trim(),
-          TAG: form.tag.trim(),
-          Instrumento: form.instrumento.trim(),
-          instrumento: form.instrumento.trim(),
-          Marca_Modelo: form.modelo.trim(),
-          modelo: form.modelo.trim(),
-          Capacidade: form.capacidade.trim(),
-          capacidade: form.capacidade.trim(),
-          Criterio_Aceitacao: form.criterioAceitacao.trim(),
-          criterioAceitacao: form.criterioAceitacao.trim(),
-          Numero_Serie: form.numeroSerie.trim(),
-          numeroSerie: form.numeroSerie.trim(),
-          Certificado_RBC: form.certificadoRbc.trim(),
-          certificado: form.certificadoRbc.trim(),
-          Laboratorio: form.laboratorio.trim(),
-          laboratorio: form.laboratorio.trim(),
-          Setor: form.setor,
-          setor: form.setor,
-          Operador_Responsavel: form.operador.trim(),
-          operador: form.operador.trim(),
-          responsavel: form.operador.trim(),
+          tag: form.tag.trim().toUpperCase(),
+          TAG: form.tag.trim().toUpperCase(),
+          id: form.tag.trim().toUpperCase(),
+          instrumento: form.instrumento.trim().toUpperCase(),
+          Instrumento: form.instrumento.trim().toUpperCase(),
+          modelo: form.modelo.trim().toUpperCase(),
+          Marca_Modelo: form.modelo.trim().toUpperCase(),
+          capacidade: form.capacidade.trim().toUpperCase(),
+          Capacidade: form.capacidade.trim().toUpperCase(),
+          criterioAceitacao: form.criterioAceitacao.trim().toUpperCase(),
+          Criterio_Aceitacao: form.criterioAceitacao.trim().toUpperCase(),
+          numeroSerie: form.numeroSerie.trim().toUpperCase(),
+          Numero_Serie: form.numeroSerie.trim().toUpperCase(),
+          certificadoRbc: form.certificadoRbc.trim().toUpperCase(),
+          Certificado_RBC: form.certificadoRbc.trim().toUpperCase(),
+          laboratorio: form.laboratorio.trim().toUpperCase(),
+          Laboratorio: form.laboratorio.trim().toUpperCase(),
+          setor: form.setor.trim().toUpperCase(),
+          Setor: form.setor.trim().toUpperCase(),
+          operador: form.operador.trim().toUpperCase(),
+          Operador_Responsavel: form.operador.trim().toUpperCase(),
+          responsavel: form.operador.trim().toUpperCase(),
+          dataCalibracao: form.dataCalibracao,
           Data_Calibracao: form.dataCalibracao,
-          dataUltimaCalibracao: form.dataCalibracao,
+          vencimentoCalibracao: form.vencimentoCalibracao,
           Vencimento_Calibracao: form.vencimentoCalibracao,
-          dataProximaCalibracao: form.vencimentoCalibracao,
+          dataChecagem: form.dataChecagem,
           Data_Checagem: form.dataChecagem,
+          vencimentoChecagem: form.vencimentoChecagem,
           Vencimento_Checagem: form.vencimentoChecagem,
-          Status: form.status,
-          status: form.status,
-          Observacoes: form.observacoes.trim(),
-          observacoes: form.observacoes.trim(),
+          status: form.status.trim().toUpperCase(),
+          Status: form.status.trim().toUpperCase(),
+          observacoes: form.observacoes.trim().toUpperCase(),
+          Observacoes: form.observacoes.trim().toUpperCase(),
           empresaId: "HIDROGERON"
         };
 
         const res = await postToAppsScript(payload);
         console.log("Resposta da gravação:", res);
 
-        // Atualização Reativa no Estado Local
+        // Atualização reativa imediata local em CAIXA ALTA
         const tagAlvo = form.tag.trim().toUpperCase();
         const indexExistente = instrumentos.value.findIndex(i => String(i.tag || i.id).toUpperCase() === tagAlvo);
         
         const itemAtualizado = {
-          id: form.id || form.tag.trim(),
-          tag: form.tag.trim(),
-          instrumento: form.instrumento.trim(),
-          modelo: form.modelo.trim(),
-          capacidade: form.capacidade.trim(),
-          criterioAceitacao: form.criterioAceitacao.trim(),
-          numeroSerie: form.numeroSerie.trim(),
-          certificadoRbc: form.certificadoRbc.trim(),
-          laboratorio: form.laboratorio.trim(),
-          setor: form.setor,
-          operador: form.operador.trim(),
+          id: tagAlvo,
+          tag: tagAlvo,
+          instrumento: form.instrumento.trim().toUpperCase(),
+          modelo: form.modelo.trim().toUpperCase(),
+          capacidade: form.capacidade.trim().toUpperCase(),
+          criterioAceitacao: form.criterioAceitacao.trim().toUpperCase(),
+          numeroSerie: form.numeroSerie.trim().toUpperCase(),
+          certificadoRbc: form.certificadoRbc.trim().toUpperCase(),
+          laboratorio: form.laboratorio.trim().toUpperCase(),
+          setor: form.setor.trim().toUpperCase(),
+          operador: form.operador.trim().toUpperCase(),
           dataCalibracao: form.dataCalibracao,
           vencimentoCalibracao: form.vencimentoCalibracao,
           dataChecagem: form.dataChecagem,
           vencimentoChecagem: form.vencimentoChecagem,
-          status: form.status,
-          observacoes: form.observacoes.trim(),
+          status: form.status.trim().toUpperCase(),
+          observacoes: form.observacoes.trim().toUpperCase(),
           statusCalculado: statusInstrumentoCalibracao(form.vencimentoCalibracao, form.status)
         };
 
@@ -496,7 +499,7 @@ const CalibracaoModule = {
         await postToAppsScript({
           action: "saveCadastro",
           tipo: "checagem_180d",
-          id: inst.id || inst.tag,
+          id: inst.tag,
           tag: inst.tag,
           TAG: inst.tag,
           dataChecagem: hoje,
@@ -524,9 +527,10 @@ const CalibracaoModule = {
     }
 
     function badgeStatusClasse(st) {
-      if (st === "No Prazo") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-      if (st === "Atenção (< 45d)") return "bg-amber-50 text-amber-700 border-amber-200";
-      if (st === "Vencido") return "bg-rose-50 text-rose-700 border-rose-200";
+      var s = String(st || "").toLowerCase();
+      if (s.indexOf("prazo") !== -1) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+      if (s.indexOf("aten") !== -1) return "bg-amber-50 text-amber-700 border-amber-200";
+      if (s.indexOf("venc") !== -1) return "bg-rose-50 text-rose-700 border-rose-200";
       return "bg-sky-50 text-sky-700 border-sky-200";
     }
 
@@ -707,29 +711,29 @@ const CalibracaoModule = {
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Capacidade</label>
-              <input v-model="form.capacidade" type="text" placeholder="Ex: 1.000 V / 1.000 A" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.capacidade" type="text" placeholder="Ex: 1.000 V / 1.000 A" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Critério de Aceitação</label>
-              <input v-model="form.criterioAceitacao" type="text" placeholder="Ex: ±6%" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.criterioAceitacao" type="text" placeholder="Ex: ±6%" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Número de Série</label>
-              <input v-model="form.numeroSerie" type="text" placeholder="Ex: 4638894" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.numeroSerie" type="text" placeholder="Ex: 4638894" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Certificado RBC</label>
-              <input v-model="form.certificadoRbc" type="text" placeholder="Ex: 0305A25" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.certificadoRbc" type="text" placeholder="Ex: 0305A25" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Laboratório / Fornecedor</label>
-              <input v-model="form.laboratorio" type="text" placeholder="Ex: RBC / MSMI - MEDICAO" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.laboratorio" type="text" placeholder="Ex: RBC / MSMI - MEDICAO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
           </div>
 
@@ -778,7 +782,7 @@ const CalibracaoModule = {
 
           <div>
             <label class="block font-semibold text-slate-600 mb-1">Observações</label>
-            <textarea v-model="form.observacoes" rows="2" class="w-full border border-slate-300 rounded-lg p-2"></textarea>
+            <textarea v-model="form.observacoes" rows="2" class="w-full border border-slate-300 rounded-lg p-2 uppercase"></textarea>
           </div>
         </div>
 
