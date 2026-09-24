@@ -1,11 +1,10 @@
 /* ==========================================================================
    js/modulos/calibracao.js — Módulo de Calibração & Medição (RSG-7601-02)
-   Gestão completa de Instrumentos de Medição, Checagem Intermediária 180d,
-   Certificados, Ficha Técnica, Etiqueta com QR Code e Emissão de Laudos.
+   Gestão de Instrumentos, Histórico Real de Calibrações, Vencimentos e Laudos
    ========================================================================== */
 
-// Helper global à prova de falhas: calcula vencimento (180 dias padrão ou conforme periodicidade)
-function calcularVencimentoChecagem(dataChecagem, periodicidade) {
+// Helpers Globais (Cross-Module)
+window.calcularVencimentoChecagem = function(dataChecagem, periodicidade) {
   if (!dataChecagem) return "";
   var d = new Date(dataChecagem);
   if (isNaN(d.getTime())) return "";
@@ -20,44 +19,9 @@ function calcularVencimentoChecagem(dataChecagem, periodicidade) {
 
   var venc = new Date(d.getTime() + (dias * 24 * 60 * 60 * 1000));
   return venc.toISOString().slice(0, 10);
-}
-window.calcularVencimentoChecagem = calcularVencimentoChecagem;
+};
 
-/* ==========================================================================
-   NORMALIZAÇÃO DE INSTRUMENTOS (Aba Calibracoes_Controle)
-   ========================================================================== */
-function normalizeCalibracao(c) {
-  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || "").toString().trim();
-  var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim();
-  var instNome = c.Instrumento || c.instrumento || c.Nome || c.nome || c.Descricao || "Instrumento";
-  var periodicidade = c.Periodicidade || c.periodicidade || "Semestral";
-  var ultimaCal = c.Data_Ultima_Calibracao || c.dataUltimaCalibracao || c.Ultima_Calibracao || c.data || "";
-  var proxCal = c.Data_Proxima_Calibracao || c.dataProximaCalibracao || c.Vencimento || "";
-
-  if (!proxCal && ultimaCal) {
-    proxCal = calcularVencimentoChecagem(ultimaCal, periodicidade);
-  }
-
-  return {
-    id: id,
-    tag: tag || id,
-    instrumento: instNome,
-    modelo: c.Modelo || c.modelo || c.Fabricante || "",
-    setor: c.Setor || c.setor || c.Area || c.area || "Uso Geral",
-    periodicidade: periodicidade,
-    dataUltimaCalibracao: ultimaCal,
-    dataProximaCalibracao: proxCal,
-    certificado: c.Numero_Certificado || c.numeroCertificado || c.Certificado || c.certificado || "",
-    laboratorio: c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || "",
-    criterioAceitacao: c.Criterio_Aceitacao || c.criterioAceitacao || "± 0,02 mm",
-    incerteza: c.Incertesa || c.incerteza || "U = 0,005 mm",
-    status: c.Status || c.status || "No Prazo",
-    observacoes: c.Observacoes || c.observacoes || "",
-    historicoChecagens: c.historicoChecagens || []
-  };
-}
-
-function calcularStatusInstrumento(dataVenc, statusManual) {
+window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
   var sm = String(statusManual || "").toLowerCase();
   if (sm === "em calibração" || sm === "em calibracao") return "Em Calibração";
   if (!dataVenc) return "No Prazo";
@@ -73,6 +37,56 @@ function calcularStatusInstrumento(dataVenc, statusManual) {
   if (diffDias < 0) return "Vencido";
   if (diffDias <= 45) return "Atenção (< 45d)";
   return "No Prazo";
+};
+
+window.extrairIdCalibracaoDoHash = function() {
+  var hash = window.location.hash || "";
+  var match = hash.match(/calibracao\/([^\/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : null;
+};
+
+var calcularVencimentoChecagem = window.calcularVencimentoChecagem;
+var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
+var extrairIdCalibracaoDoHash = window.extrairIdCalibracaoDoHash;
+
+/* ==========================================================================
+   NORMALIZAÇÃO DE DADOS (MAPEAMENTO FLEXÍVEL DA PLANILHA)
+   ========================================================================== */
+function normalizeCalibracao(c) {
+  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || c.id_instrumento || "").toString().trim();
+  var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim();
+  var instNome = c.Instrumento || c.instrumento || c.Nome || c.nome || c.Equipamento || c.equipamento || c.Descricao || "Instrumento";
+  var periodicidade = c.Periodicidade || c.periodicidade || c.Frequencia || c.frequencia || "Semestral";
+  
+  var ultimaCal = c.Data_Ultima_Calibracao || c.dataUltimaCalibracao || c.Ultima_Calibracao || c.ultima_calibracao 
+    || c.Data_Calibracao || c.data_calibracao || c.Data || c.data || "";
+    
+  var proxCal = c.Data_Proxima_Calibracao || c.dataProximaCalibracao || c.Proxima_Calibracao || c.proxima_calibracao 
+    || c.Vencimento || c.vencimento || c.Data_Vencimento || "";
+
+  if (!proxCal && ultimaCal) {
+    proxCal = calcularVencimentoChecagem(ultimaCal, periodicidade);
+  }
+
+  var certificado = c.Numero_Certificado || c.numeroCertificado || c.Certificado || c.certificado || c.N_Certificado || c.n_certificado || "";
+  var laboratorio = c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || c.Orgao_Calibrador || "";
+
+  return {
+    id: id,
+    tag: tag || id,
+    instrumento: instNome,
+    modelo: c.Modelo || c.modelo || c.Fabricante || c.fabricante || "",
+    setor: c.Setor || c.setor || c.Area || c.area || "Uso Geral",
+    periodicidade: periodicidade,
+    dataUltimaCalibracao: ultimaCal,
+    dataProximaCalibracao: proxCal,
+    certificado: certificado,
+    laboratorio: laboratorio,
+    criterioAceitacao: c.Criterio_Aceitacao || c.criterioAceitacao || "± 0,02 mm",
+    incerteza: c.Incerteza || c.incerteza || c.Incertesa || "U = 0,005 mm",
+    status: c.Status || c.status || "No Prazo",
+    observacoes: c.Observacoes || c.observacoes || ""
+  };
 }
 
 /* ==========================================================================
@@ -102,7 +116,7 @@ const FichaInstrumentoModal = {
     <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
       <div class="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
         <div>
-          <span class="text-xs font-mono font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">{{ instrumento.tag }}</span>
+          <span class="text-xs font-mono font-bold text-sky-700 bg-sky-100 px-2.5 py-0.5 rounded-full">{{ instrumento.tag }}</span>
           <h3 class="font-extrabold text-slate-800 text-base mt-1">{{ instrumento.instrumento }}</h3>
         </div>
         <button @click="$emit('fechar')" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-2">✕</button>
@@ -139,7 +153,7 @@ const FichaInstrumentoModal = {
         </div>
 
         <div class="border border-slate-200 p-3 rounded-xl space-y-2">
-          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px]">Parâmetros Metrológicos</p>
+          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px]">Dados Metrológicos do Certificado</p>
           <div class="grid grid-cols-2 gap-2 text-slate-600">
             <p><strong>Nº Certificado:</strong> {{ instrumento.certificado || '—' }}</p>
             <p><strong>Laboratório:</strong> {{ instrumento.laboratorio || '—' }}</p>
@@ -153,18 +167,17 @@ const FichaInstrumentoModal = {
           <p class="text-slate-600">{{ instrumento.observacoes }}</p>
         </div>
 
-        <!-- Botões de Ação na Ficha -->
-        <div class="grid grid-cols-2 gap-2 pt-2">
-          <button @click="$emit('ver-laudo')" class="btn-tap flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-xs">
-            📄 Visualizar Laudo
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2">
+          <button @click="$emit('ver-laudo')" class="btn-tap flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-xs">
+            📄 Laudo
           </button>
-          <button @click="$emit('gerar-qr')" class="btn-tap flex items-center justify-center gap-1.5 bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 font-semibold py-2.5 rounded-lg text-xs">
-            🏷️ Etiqueta & QR
+          <button @click="$emit('gerar-qr')" class="btn-tap flex items-center justify-center gap-1 bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 font-semibold py-2.5 rounded-lg text-xs">
+            🏷️ Etiqueta
           </button>
-          <button @click="$emit('registrar-checagem')" class="btn-tap flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-xs">
-            ✅ Checagem 180d
+          <button @click="$emit('registrar-checagem')" class="btn-tap flex items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-xs">
+            ✅ Checagem
           </button>
-          <button @click="$emit('editar')" class="btn-tap flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-lg text-xs">
+          <button @click="$emit('editar')" class="btn-tap flex items-center justify-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-lg text-xs">
             ✏️ Editar
           </button>
         </div>
@@ -190,7 +203,7 @@ const EtiquetaQRModal = {
   template: `
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="$emit('fechar')">
     <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 text-center space-y-4">
-      <h3 class="font-bold text-slate-800 text-sm">Etiqueta Metrológica de Identificação</h3>
+      <h3 class="font-bold text-slate-800 text-sm">Etiqueta Metrológica com QR Code</h3>
       <div id="etiqueta-print" class="border-2 border-dashed border-slate-300 p-4 rounded-xl flex flex-col items-center space-y-2 bg-slate-50">
         <img :src="qrUrl" class="w-32 h-32 rounded-lg border border-slate-200 shadow-sm" alt="QR Code" />
         <p class="font-extrabold text-base text-slate-800 font-mono tracking-wider">{{ instrumento.tag }}</p>
@@ -210,7 +223,7 @@ const EtiquetaQRModal = {
 };
 
 /* ==========================================================================
-   MÓDULO PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO
+   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO (ROBUSTO COM LEITURA DA API)
    ========================================================================== */
 const CalibracaoModule = {
   props: { user: Object },
@@ -225,7 +238,6 @@ const CalibracaoModule = {
     const filtroStatus = ref("todos");
     const setoresDisponiveis = ref([]);
 
-    // Modais e Estados
     const modalFichaAberto = ref(false);
     const modalQRAberto = ref(false);
     const modalCadastroAberto = ref(false);
@@ -254,20 +266,21 @@ const CalibracaoModule = {
       loading.value = true;
       erro.value = "";
       try {
-        const data = await getInitialData();
-        const listaBruta = data.calibracoes || data.Calibracoes || data.calibracoes_controle || [];
+        const rawData = await getInitialData();
+        const base = (rawData && rawData.data) ? rawData.data : rawData;
+        const listaBruta = base.calibracoes || base.Calibracoes || base.calibracoes_controle || base.Calibracoes_Controle || [];
         
         instrumentos.value = listaBruta.map(function(item) {
           const norm = normalizeCalibracao(item);
-          norm.statusCalculado = calcularStatusInstrumento(norm.dataProximaCalibracao, norm.status);
+          norm.statusCalculado = statusInstrumentoCalibracao(norm.dataProximaCalibracao, norm.status);
           return norm;
         });
 
-        // Monta lista de setores a partir dos dados da planilha
         const sSet = new Set();
         instrumentos.value.forEach(i => { if (i.setor) sSet.add(i.setor); });
-        if (data.setores && Array.isArray(data.setores)) {
-          data.setores.forEach(s => sSet.add(s.Nome || s.nome || s));
+        const setoresBase = base.setores || [];
+        if (Array.isArray(setoresBase)) {
+          setoresBase.forEach(s => sSet.add(s.Nome || s.nome || s));
         }
         setoresDisponiveis.value = Array.from(sSet).filter(Boolean);
 
@@ -279,7 +292,6 @@ const CalibracaoModule = {
       }
     }
 
-    // Contadores Cards Superiores
     const contadores = computed(() => {
       let noPrazo = 0, atencao = 0, vencidos = 0, emCalibracao = 0;
       instrumentos.value.forEach(i => {
@@ -292,14 +304,13 @@ const CalibracaoModule = {
       return { noPrazo, atencao, vencidos, emCalibracao };
     });
 
-    // Lista Filtrada
     const instrumentosFiltrados = computed(() => {
       const b = busca.value.trim().toLowerCase();
       return instrumentos.value.filter(i => {
         if (filtroSetor.value !== "todos" && i.setor !== filtroSetor.value) return false;
         if (filtroStatus.value !== "todos" && i.statusCalculado !== filtroStatus.value) return false;
         if (b) {
-          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.certificado}`.toLowerCase();
+          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.certificado} ${i.setor}`.toLowerCase();
           if (!combo.includes(b)) return false;
         }
         return true;
@@ -347,8 +358,8 @@ const CalibracaoModule = {
         modelo: inst.modelo,
         setor: inst.setor,
         periodicidade: inst.periodicidade,
-        dataUltimaCalibracao: inst.dataUltimaCalibracao ? inst.dataUltimaCalibracao.slice(0, 10) : "",
-        dataProximaCalibracao: inst.dataProximaCalibracao ? inst.dataProximaCalibracao.slice(0, 10) : "",
+        dataUltimaCalibracao: inst.dataUltimaCalibracao ? String(inst.dataUltimaCalibracao).slice(0, 10) : "",
+        dataProximaCalibracao: inst.dataProximaCalibracao ? String(inst.dataProximaCalibracao).slice(0, 10) : "",
         certificado: inst.certificado,
         laboratorio: inst.laboratorio,
         criterioAceitacao: inst.criterioAceitacao,
@@ -393,7 +404,7 @@ const CalibracaoModule = {
         };
 
         await postToAppsScript(payload);
-        pushToast("Instrumento gravado na base de dados!", "success");
+        pushToast("Instrumento salvo com sucesso!", "success");
         modalCadastroAberto.value = false;
         await carregar();
       } catch (e) {
@@ -425,7 +436,7 @@ const CalibracaoModule = {
         inst.dataUltimaCalibracao = hoje;
         inst.dataProximaCalibracao = novoVenc;
         inst.statusCalculado = "No Prazo";
-        pushToast(`Checagem do instrumento ${inst.tag} registrada com sucesso!`, "success");
+        pushToast(`Checagem do instrumento ${inst.tag} registrada!`, "success");
         modalFichaAberto.value = false;
       } catch (e) {
         console.error(e);
@@ -461,28 +472,28 @@ const CalibracaoModule = {
     <!-- Contadores Cards -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></span>
+        <span class="w-3.5 h-3.5 rounded-full bg-emerald-500"></span>
         <div>
           <p class="text-xl font-extrabold text-slate-800">{{ contadores.noPrazo }}</p>
           <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">No Prazo (> 45d)</p>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-amber-400 shadow-sm shadow-amber-200"></span>
+        <span class="w-3.5 h-3.5 rounded-full bg-amber-400"></span>
         <div>
           <p class="text-xl font-extrabold text-slate-800">{{ contadores.atencao }}</p>
           <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Atenção (≤ 45d)</p>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-rose-500 shadow-sm shadow-rose-200"></span>
+        <span class="w-3.5 h-3.5 rounded-full bg-rose-500"></span>
         <div>
           <p class="text-xl font-extrabold text-slate-800">{{ contadores.vencidos }}</p>
           <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Vencidos</p>
         </div>
       </div>
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-sky-500 shadow-sm shadow-sky-200"></span>
+        <span class="w-3.5 h-3.5 rounded-full bg-sky-500"></span>
         <div>
           <p class="text-xl font-extrabold text-slate-800">{{ contadores.emCalibracao }}</p>
           <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Em Calibração</p>
@@ -514,15 +525,13 @@ const CalibracaoModule = {
       </div>
     </div>
 
-    <!-- Mensagem de Erro (se houver) -->
     <div v-if="erro" class="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-xs font-semibold">
       {{ erro }}
     </div>
 
-    <!-- Spinner de Loading -->
     <div v-if="loading" class="flex justify-center py-12"><span class="spinner"></span></div>
 
-    <!-- Tabela de Instrumentos (Design Rico) -->
+    <!-- Tabela de Instrumentos -->
     <div v-else class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
       <div class="overflow-x-auto">
         <table class="w-full text-xs text-left">
@@ -534,7 +543,7 @@ const CalibracaoModule = {
               <th class="p-3">Última Calibração</th>
               <th class="p-3">Vencimento</th>
               <th class="p-3">Status</th>
-              <th class="p-3 text-right">Ações</th>
+              <th class="p-3 text-center w-28">Ações</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -554,13 +563,16 @@ const CalibracaoModule = {
                   {{ inst.statusCalculado }}
                 </span>
               </td>
-              <td class="p-3 text-right">
-                <div class="flex items-center justify-end gap-1.5">
-                  <button @click="abrirFicha(inst)" class="btn-tap px-2.5 py-1 text-xs font-semibold text-sky-600 bg-sky-50 hover:bg-sky-100 rounded-md">
-                    Ficha
+              <td class="p-3 text-center">
+                <div class="flex items-center justify-center gap-1.5">
+                  <button @click="abrirFicha(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors" title="Visualizar Ficha Técnica / Laudo">
+                    👁️
                   </button>
-                  <button @click="abrirQR(inst)" class="btn-tap px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-md" title="Gerar Etiqueta QR">
+                  <button @click="abrirQR(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Gerar Etiqueta com QR Code">
                     🏷️
+                  </button>
+                  <button @click="abrirEditar(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Instrumento">
+                    ✏️
                   </button>
                 </div>
               </td>
@@ -586,13 +598,11 @@ const CalibracaoModule = {
 
     <etiqueta-q-r-modal v-if="modalQRAberto" :instrumento="instrumentoSelecionado" @fechar="modalQRAberto = false"></etiqueta-q-r-modal>
 
-    <!-- MODAL: Cadastro & Edição de Instrumento -->
+    <!-- Modal Cadastro & Edição -->
     <div v-if="modalCadastroAberto" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
       <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between border-b pb-3">
-          <h3 class="font-bold text-slate-800 text-sm">
-            {{ editando ? 'Editar Instrumento' : 'Novo Instrumento de Medição' }}
-          </h3>
+          <h3 class="font-bold text-slate-800 text-sm">{{ editando ? 'Editar Instrumento' : 'Novo Instrumento de Medição' }}</h3>
           <button @click="modalCadastroAberto = false" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-1">✕</button>
         </div>
 
@@ -600,18 +610,18 @@ const CalibracaoModule = {
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block font-semibold text-slate-600 mb-1">TAG / Código *</label>
-              <input v-model="form.tag" type="text" placeholder="Ex: PAQ-01" class="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-500 font-mono" />
+              <input v-model="form.tag" type="text" placeholder="Ex: CAL-001" class="w-full border border-slate-300 rounded-lg p-2 font-mono" />
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Instrumento *</label>
-              <input v-model="form.instrumento" type="text" placeholder="Ex: Paquímetro Digital" class="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-sky-500" />
+              <input v-model="form.instrumento" type="text" placeholder="Ex: Alicate Amperímetro" class="w-full border border-slate-300 rounded-lg p-2" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Modelo / Faixa</label>
-              <input v-model="form.modelo" type="text" placeholder="Ex: 0-150mm Mitutoyo" class="w-full border border-slate-300 rounded-lg p-2" />
+              <label class="block font-semibold text-slate-600 mb-1">Modelo / Fabricante</label>
+              <input v-model="form.modelo" type="text" placeholder="Ex: ET-3810C Minipa" class="w-full border border-slate-300 rounded-lg p-2" />
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Setor / Área</label>
@@ -633,30 +643,19 @@ const CalibracaoModule = {
               </select>
             </div>
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Data da Última Calibração</label>
+              <label class="block font-semibold text-slate-600 mb-1">Última Calibração</label>
               <input v-model="form.dataUltimaCalibracao" @change="atualizarProximoVencimento" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Data de Vencimento</label>
+              <label class="block font-semibold text-slate-600 mb-1">Próximo Vencimento</label>
               <input v-model="form.dataProximaCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
             </div>
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Nº Certificado</label>
+              <label class="block font-semibold text-slate-600 mb-1">Nº do Certificado</label>
               <input v-model="form.certificado" type="text" placeholder="Ex: CERT-2026-99" class="w-full border border-slate-300 rounded-lg p-2" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Critério Aceitação</label>
-              <input v-model="form.criterioAceitacao" type="text" placeholder="Ex: ± 0,02 mm" class="w-full border border-slate-300 rounded-lg p-2" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Incerteza Expandida</label>
-              <input v-model="form.incerteza" type="text" placeholder="Ex: U = 0,005 mm" class="w-full border border-slate-300 rounded-lg p-2" />
             </div>
           </div>
 
@@ -672,7 +671,7 @@ const CalibracaoModule = {
         </div>
 
         <div class="flex justify-end gap-2 border-t pt-3">
-          <button @click="modalCadastroAberto = false" class="btn-tap px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold">Cancelar</button>
+          <button @click="modalCadastroAberto = false" class="btn-tap px-3.5 py-2 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold">Cancelar</button>
           <button @click="salvarInstrumento" :disabled="salvando" class="btn-tap px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-md">
             {{ salvando ? 'Gravando...' : 'Gravar Instrumento' }}
           </button>
