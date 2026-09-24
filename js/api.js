@@ -6,7 +6,22 @@
    backend — hoje só existe a empresa HIDROGERON).
    ========================================================================== */
 const API_URL = "https://script.google.com/macros/s/AKfycbxeM7DmvSrJW_uzm30LRwZsZnlQQO5MNwNzmC75dLd5lwJB1MFfZnQRIHuF2ihBl0_U/exec";
+window.extrairIdCalibracaoDoHash = function() {
+  var hash = window.location.hash || "";
+  var match = hash.match(/calibracao\/([^\/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : null;
+};
 
+window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
+  var sm = String(statusManual || "").toLowerCase();
+  if (sm.indexOf("calibra") !== -1) return "Em Calibração";
+  if (!dataVenc) return "No Prazo";
+  var diff = Math.ceil((new Date(dataVenc).getTime() - new Date().setHours(0,0,0,0)) / 86400000);
+  return diff < 0 ? "Vencido" : (diff <= 45 ? "Atenção (< 45d)" : "No Prazo");
+};
+
+var extrairIdCalibracaoDoHash = window.extrairIdCalibracaoDoHash;
+var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
 // Preparação para múltiplas empresas (tenants) no mesmo backend: hoje só
 // existe a Hidrogeron, mas toda requisição já viaja com empresaId, para que
 // o Apps Script possa futuramente rotear/filtrar por empresa sem exigir uma
@@ -230,4 +245,25 @@ async function saveCadastroApi(tipo, payload) {
 async function deleteCadastroApi(tipo, id) {
   return apiGet({ action: "deleteRecord", tipo: "cadastro_" + tipo, id });
 }
+// ============================================================================
+// Utilitários Globais de Cálculo e Normalização (Cross-Module)
+// ============================================================================
+window.calcularVencimentoChecagem = function(dataChecagem, periodicidade) {
+  if (!dataChecagem) return "";
+  var d = new Date(dataChecagem);
+  if (isNaN(d.getTime())) return "";
+  
+  var p = String(periodicidade || "").trim().toLowerCase();
+  var dias = 180;
+  if (p === "mensal") dias = 30;
+  else if (p === "bimestral") dias = 60;
+  else if (p === "trimestral") dias = 90;
+  else if (p === "semestral") dias = 180;
+  else if (p === "anual") dias = 365;
 
+  var venc = new Date(d.getTime() + (dias * 24 * 60 * 60 * 1000));
+  return venc.toISOString().slice(0, 10);
+};
+
+// Aliases globais de segurança
+var calcularVencimentoChecagem = window.calcularVencimentoChecagem;
