@@ -223,7 +223,7 @@ const EtiquetaQRModal = {
 };
 
 /* ==========================================================================
-   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO (ROBUSTO COM LEITURA DA API)
+   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO
    ========================================================================== */
 const CalibracaoModule = {
   props: { user: Object },
@@ -262,11 +262,11 @@ const CalibracaoModule = {
       observacoes: ""
     });
 
-    async function carregar() {
+    async function carregar(force = false) {
       loading.value = true;
       erro.value = "";
       try {
-        const rawData = await getInitialData();
+        const rawData = await getInitialData(force);
         const base = (rawData && rawData.data) ? rawData.data : rawData;
         const listaBruta = base.calibracoes || base.Calibracoes || base.calibracoes_controle || base.Calibracoes_Controle || [];
         
@@ -330,7 +330,7 @@ const CalibracaoModule = {
     function abrirNovo() {
       editando.value = false;
       Object.assign(form, {
-        id: "INST-" + Date.now(),
+        id: "CAL-" + Date.now(),
         tag: "",
         instrumento: "",
         modelo: "",
@@ -352,7 +352,7 @@ const CalibracaoModule = {
     function abrirEditar(inst) {
       editando.value = true;
       Object.assign(form, {
-        id: inst.id,
+        id: inst.id || inst.tag,
         tag: inst.tag,
         instrumento: inst.instrumento,
         modelo: inst.modelo,
@@ -386,29 +386,46 @@ const CalibracaoModule = {
         const payload = {
           action: "saveCadastro",
           tipo: "calibracao_instrumento",
-          id: form.id,
+          id: form.id || form.tag.trim(),
           tag: form.tag.trim(),
+          TAG: form.tag.trim(),
+          ID_Instrumento: form.id || form.tag.trim(),
+          Instrumento: form.instrumento.trim(),
           instrumento: form.instrumento.trim(),
+          Modelo: form.modelo.trim(),
           modelo: form.modelo.trim(),
+          Setor: form.setor,
           setor: form.setor,
+          Periodicidade: form.periodicidade,
           periodicidade: form.periodicidade,
+          Data_Ultima_Calibracao: form.dataUltimaCalibracao,
           dataUltimaCalibracao: form.dataUltimaCalibracao,
+          Data_Proxima_Calibracao: form.dataProximaCalibracao,
           dataProximaCalibracao: form.dataProximaCalibracao,
+          Numero_Certificado: form.certificado.trim(),
           certificado: form.certificado.trim(),
+          Laboratorio: form.laboratorio.trim(),
           laboratorio: form.laboratorio.trim(),
+          Criterio_Aceitacao: form.criterioAceitacao,
           criterioAceitacao: form.criterioAceitacao,
+          Incerteza: form.incerteza,
           incerteza: form.incerteza,
+          Status: form.status,
           status: form.status,
+          Observacoes: form.observacoes.trim(),
           observacoes: form.observacoes.trim(),
           empresaId: "HIDROGERON"
         };
 
-        await postToAppsScript(payload);
-        pushToast("Instrumento salvo com sucesso!", "success");
+        const res = await postToAppsScript(payload);
+        console.log("Resposta da gravação:", res);
+        pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
-        await carregar();
+        
+        // Força recarregamento sem cache da planilha
+        await carregar(true);
       } catch (e) {
-        console.error(e);
+        console.error("Erro ao salvar:", e);
         pushToast("Erro ao gravar instrumento.", "error");
       } finally {
         salvando.value = false;
@@ -426,7 +443,9 @@ const CalibracaoModule = {
         await postToAppsScript({
           action: "saveCadastro",
           tipo: "checagem_180d",
-          id: inst.id,
+          id: inst.id || inst.tag,
+          tag: inst.tag,
+          TAG: inst.tag,
           dataChecagem: hoje,
           dataProximaCalibracao: novoVenc,
           usuario: props.user?.nome || "Responsável Metrologia",
@@ -438,6 +457,7 @@ const CalibracaoModule = {
         inst.statusCalculado = "No Prazo";
         pushToast(`Checagem do instrumento ${inst.tag} registrada!`, "success");
         modalFichaAberto.value = false;
+        await carregar(true);
       } catch (e) {
         console.error(e);
         pushToast("Erro ao registrar checagem.", "error");
