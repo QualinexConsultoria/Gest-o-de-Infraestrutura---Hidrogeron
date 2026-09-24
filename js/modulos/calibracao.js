@@ -1,6 +1,6 @@
 /* ==========================================================================
    js/modulos/calibracao.js — Módulo de Calibração & Medição (RSG-7601-02)
-   Gestão de Instrumentos, Histórico Real de Calibrações, Vencimentos e Laudos
+   100% Fiel à Planilha Cadastro de Equipamentos - Manutenção Hidrogeron
    ========================================================================== */
 
 // Helpers Globais (Cross-Module)
@@ -23,7 +23,7 @@ window.calcularVencimentoChecagem = function(dataChecagem, periodicidade) {
 
 window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
   var sm = String(statusManual || "").toLowerCase();
-  if (sm === "em calibração" || sm === "em calibracao") return "Em Calibração";
+  if (sm.indexOf("calibra") !== -1) return "Em Calibração";
   if (!dataVenc) return "No Prazo";
   
   var dVenc = new Date(dataVenc);
@@ -50,42 +50,46 @@ var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
 var extrairIdCalibracaoDoHash = window.extrairIdCalibracaoDoHash;
 
 /* ==========================================================================
-   NORMALIZAÇÃO DE DADOS (MAPEAMENTO FLEXÍVEL DA PLANILHA)
+   NORMALIZAÇÃO DE DADOS — MAPEAMENTO COMPLETO DA PLANILHA
    ========================================================================== */
 function normalizeCalibracao(c) {
-  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || c.id_instrumento || "").toString().trim();
+  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || "").toString().trim();
   var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim();
-  var instNome = c.Instrumento || c.instrumento || c.Nome || c.nome || c.Equipamento || c.equipamento || c.Descricao || "Instrumento";
-  var periodicidade = c.Periodicidade || c.periodicidade || c.Frequencia || c.frequencia || "Semestral";
-  
-  var ultimaCal = c.Data_Ultima_Calibracao || c.dataUltimaCalibracao || c.Ultima_Calibracao || c.ultima_calibracao 
-    || c.Data_Calibracao || c.data_calibracao || c.Data || c.data || "";
-    
-  var proxCal = c.Data_Proxima_Calibracao || c.dataProximaCalibracao || c.Proxima_Calibracao || c.proxima_calibracao 
-    || c.Vencimento || c.vencimento || c.Data_Vencimento || "";
-
-  if (!proxCal && ultimaCal) {
-    proxCal = calcularVencimentoChecagem(ultimaCal, periodicidade);
-  }
-
-  var certificado = c.Numero_Certificado || c.numeroCertificado || c.Certificado || c.certificado || c.N_Certificado || c.n_certificado || "";
+  var instNome = c.Instrumento || c.instrumento || c.Equipamento || c.equipamento || c.Nome || c.Descricao || "Instrumento";
+  var modelo = c.Marca_Modelo || c.marca_modelo || c.Modelo || c.modelo || "";
+  var capacidade = c.Capacidade || c.capacidade || "";
+  var criterio = c.Criterio_Aceitacao || c.criterio_aceitacao || c.Criterio || "";
+  var numSerie = c.Numero_Serie || c.numero_serie || c.Serie || "";
+  var certRbc = c.Certificado_RBC || c.certificado_rbc || c.Certificado || c.Numero_Certificado || "";
   var laboratorio = c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || c.Orgao_Calibrador || "";
+  var setor = c.Setor || c.setor || "Geral";
+  var operador = c.Operador_Responsavel || c.operador_responsavel || c.Operador || c.responsavel || c.Responsavel || "";
+  
+  var dtCal = c.Data_Calibracao || c.data_calibracao || c.Data_Ultima_Calibracao || "";
+  var vencCal = c.Vencimento_Calibracao || c.vencimento_calibracao || c.Data_Proxima_Calibracao || "";
+  var dtChec = c.Data_Checagem || c.data_checagem || "";
+  var vencChec = c.Vencimento_Checagem || c.vencimento_checagem || "";
+  var status = c.Status || c.status || "No Prazo";
+  var obs = c.Observacoes || c.observacoes || "";
 
   return {
     id: id,
     tag: tag || id,
     instrumento: instNome,
-    modelo: c.Modelo || c.modelo || c.Fabricante || c.fabricante || "",
-    setor: c.Setor || c.setor || c.Area || c.area || "Uso Geral",
-    periodicidade: periodicidade,
-    dataUltimaCalibracao: ultimaCal,
-    dataProximaCalibracao: proxCal,
-    certificado: certificado,
+    modelo: modelo,
+    capacidade: capacidade,
+    criterioAceitacao: criterio,
+    numeroSerie: numSerie,
+    certificadoRbc: certRbc,
     laboratorio: laboratorio,
-    criterioAceitacao: c.Criterio_Aceitacao || c.criterioAceitacao || "± 0,02 mm",
-    incerteza: c.Incerteza || c.incerteza || c.Incertesa || "U = 0,005 mm",
-    status: c.Status || c.status || "No Prazo",
-    observacoes: c.Observacoes || c.observacoes || ""
+    setor: setor,
+    operador: operador,
+    dataCalibracao: dtCal ? String(dtCal).slice(0, 10) : "",
+    vencimentoCalibracao: vencCal ? String(vencCal).slice(0, 10) : "",
+    dataChecagem: dtChec ? String(dtChec).slice(0, 10) : "",
+    vencimentoChecagem: vencChec ? String(vencChec).slice(0, 10) : "",
+    status: status,
+    observacoes: obs
   };
 }
 
@@ -129,7 +133,7 @@ const FichaInstrumentoModal = {
             <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.setor }}</p>
           </div>
           <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Modelo / Fabricante</p>
+            <p class="text-slate-400 font-semibold uppercase text-[10px]">Marca / Modelo</p>
             <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.modelo || '—' }}</p>
           </div>
           <div>
@@ -139,26 +143,29 @@ const FichaInstrumentoModal = {
             </span>
           </div>
           <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Última Calibração</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.dataUltimaCalibracao) }}</p>
+            <p class="text-slate-400 font-semibold uppercase text-[10px]">Data Calibração</p>
+            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.dataCalibracao) }}</p>
           </div>
           <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Próximo Vencimento</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.dataProximaCalibracao) }}</p>
+            <p class="text-slate-400 font-semibold uppercase text-[10px]">Vencimento Calibração</p>
+            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.vencimentoCalibracao) }}</p>
           </div>
           <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Periodicidade</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.periodicidade }}</p>
+            <p class="text-slate-400 font-semibold uppercase text-[10px]">Operador Responsável</p>
+            <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.operador || '—' }}</p>
           </div>
         </div>
 
         <div class="border border-slate-200 p-3 rounded-xl space-y-2">
-          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px]">Dados Metrológicos do Certificado</p>
+          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px]">Especificações & Metrologia</p>
           <div class="grid grid-cols-2 gap-2 text-slate-600">
-            <p><strong>Nº Certificado:</strong> {{ instrumento.certificado || '—' }}</p>
-            <p><strong>Laboratório:</strong> {{ instrumento.laboratorio || '—' }}</p>
-            <p><strong>Critério Aceitação:</strong> {{ instrumento.criterioAceitacao }}</p>
-            <p><strong>Incerteza:</strong> {{ instrumento.incerteza }}</p>
+            <p><strong>Capacidade:</strong> {{ instrumento.capacidade || '—' }}</p>
+            <p><strong>Critério Aceitação:</strong> {{ instrumento.criterioAceitacao || '—' }}</p>
+            <p><strong>Nº de Série:</strong> {{ instrumento.numeroSerie || '—' }}</p>
+            <p><strong>Certificado RBC:</strong> {{ instrumento.certificadoRbc || '—' }}</p>
+            <p><strong>Laboratório / Fornecedor:</strong> {{ instrumento.laboratorio || '—' }}</p>
+            <p><strong>Última Checagem:</strong> {{ formatarData(instrumento.dataChecagem) }}</p>
+            <p class="col-span-2"><strong>Vencimento Checagem:</strong> {{ formatarData(instrumento.vencimentoChecagem) }}</p>
           </div>
         </div>
 
@@ -210,7 +217,7 @@ const EtiquetaQRModal = {
         <p class="font-semibold text-xs text-slate-700">{{ instrumento.instrumento }}</p>
         <p class="text-[10px] text-slate-500">Setor: {{ instrumento.setor }}</p>
         <div class="text-[10px] text-slate-400 border-t border-slate-200 pt-1 w-full flex justify-between">
-          <span>Venc: {{ instrumento.dataProximaCalibracao || '—' }}</span>
+          <span>Venc: {{ instrumento.vencimentoCalibracao || '—' }}</span>
           <span>Hidrogeron</span>
         </div>
       </div>
@@ -223,7 +230,7 @@ const EtiquetaQRModal = {
 };
 
 /* ==========================================================================
-   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO (ATUALIZAÇÃO REATIVA IMEDIATA)
+   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO
    ========================================================================== */
 const CalibracaoModule = {
   props: { user: Object },
@@ -245,19 +252,32 @@ const CalibracaoModule = {
     const salvando = ref(false);
     const editando = ref(false);
 
+    function getNomeOperadorAtivo() {
+      return (
+        props.user?.nome ||
+        props.user?.name ||
+        props.user?.email ||
+        window.userLogado?.nome ||
+        "EDUARDO"
+      );
+    }
+
     const form = reactive({
       id: "",
       tag: "",
       instrumento: "",
       modelo: "",
-      setor: "Uso Geral",
-      periodicidade: "Semestral",
-      dataUltimaCalibracao: "",
-      dataProximaCalibracao: "",
-      certificado: "",
+      capacidade: "",
+      criterioAceitacao: "",
+      numeroSerie: "",
+      certificadoRbc: "",
       laboratorio: "",
-      criterioAceitacao: "± 0,02 mm",
-      incerteza: "U = 0,005 mm",
+      setor: "ELÉTRICA",
+      operador: "",
+      dataCalibracao: "",
+      vencimentoCalibracao: "",
+      dataChecagem: "",
+      vencimentoChecagem: "",
       status: "No Prazo",
       observacoes: ""
     });
@@ -272,7 +292,7 @@ const CalibracaoModule = {
         
         instrumentos.value = listaBruta.map(function(item) {
           const norm = normalizeCalibracao(item);
-          norm.statusCalculado = statusInstrumentoCalibracao(norm.dataProximaCalibracao, norm.status);
+          norm.statusCalculado = statusInstrumentoCalibracao(norm.vencimentoCalibracao, norm.status);
           return norm;
         });
 
@@ -310,7 +330,7 @@ const CalibracaoModule = {
         if (filtroSetor.value !== "todos" && i.setor !== filtroSetor.value) return false;
         if (filtroStatus.value !== "todos" && i.statusCalculado !== filtroStatus.value) return false;
         if (b) {
-          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.certificado} ${i.setor}`.toLowerCase();
+          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.capacidade} ${i.certificadoRbc} ${i.laboratorio} ${i.setor} ${i.operador}`.toLowerCase();
           if (!combo.includes(b)) return false;
         }
         return true;
@@ -334,18 +354,20 @@ const CalibracaoModule = {
         tag: "",
         instrumento: "",
         modelo: "",
-        setor: setoresDisponiveis.value[0] || "Uso Geral",
-        periodicidade: "Semestral",
-        dataUltimaCalibracao: new Date().toISOString().slice(0, 10),
-        dataProximaCalibracao: "",
-        certificado: "",
+        capacidade: "",
+        criterioAceitacao: "±6%",
+        numeroSerie: "",
+        certificadoRbc: "",
         laboratorio: "",
-        criterioAceitacao: "± 0,02 mm",
-        incerteza: "U = 0,005 mm",
+        setor: setoresDisponiveis.value[0] || "ELÉTRICA",
+        operador: getNomeOperadorAtivo(),
+        dataCalibracao: new Date().toISOString().slice(0, 10),
+        vencimentoCalibracao: "",
+        dataChecagem: "",
+        vencimentoChecagem: "",
         status: "No Prazo",
         observacoes: ""
       });
-      atualizarProximoVencimento();
       modalCadastroAberto.value = true;
     }
 
@@ -356,25 +378,22 @@ const CalibracaoModule = {
         tag: inst.tag,
         instrumento: inst.instrumento,
         modelo: inst.modelo,
-        setor: inst.setor,
-        periodicidade: inst.periodicidade,
-        dataUltimaCalibracao: inst.dataUltimaCalibracao ? String(inst.dataUltimaCalibracao).slice(0, 10) : "",
-        dataProximaCalibracao: inst.dataProximaCalibracao ? String(inst.dataProximaCalibracao).slice(0, 10) : "",
-        certificado: inst.certificado,
-        laboratorio: inst.laboratorio,
+        capacidade: inst.capacidade,
         criterioAceitacao: inst.criterioAceitacao,
-        incerteza: inst.incerteza,
+        numeroSerie: inst.numeroSerie,
+        certificadoRbc: inst.certificadoRbc,
+        laboratorio: inst.laboratorio,
+        setor: inst.setor,
+        operador: inst.operador || getNomeOperadorAtivo(),
+        dataCalibracao: inst.dataCalibracao ? String(inst.dataCalibracao).slice(0, 10) : "",
+        vencimentoCalibracao: inst.vencimentoCalibracao ? String(inst.vencimentoCalibracao).slice(0, 10) : "",
+        dataChecagem: inst.dataChecagem ? String(inst.dataChecagem).slice(0, 10) : "",
+        vencimentoChecagem: inst.vencimentoChecagem ? String(inst.vencimentoChecagem).slice(0, 10) : "",
         status: inst.status,
         observacoes: inst.observacoes
       });
       modalFichaAberto.value = false;
       modalCadastroAberto.value = true;
-    }
-
-    function atualizarProximoVencimento() {
-      if (form.dataUltimaCalibracao && form.periodicidade) {
-        form.dataProximaCalibracao = calcularVencimentoChecagem(form.dataUltimaCalibracao, form.periodicidade);
-      }
     }
 
     async function salvarInstrumento() {
@@ -389,27 +408,31 @@ const CalibracaoModule = {
           id: form.id || form.tag.trim(),
           tag: form.tag.trim(),
           TAG: form.tag.trim(),
-          ID_Instrumento: form.id || form.tag.trim(),
           Instrumento: form.instrumento.trim(),
           instrumento: form.instrumento.trim(),
-          Modelo: form.modelo.trim(),
+          Marca_Modelo: form.modelo.trim(),
           modelo: form.modelo.trim(),
-          Setor: form.setor,
-          setor: form.setor,
-          Periodicidade: form.periodicidade,
-          periodicidade: form.periodicidade,
-          Data_Ultima_Calibracao: form.dataUltimaCalibracao,
-          dataUltimaCalibracao: form.dataUltimaCalibracao,
-          Data_Proxima_Calibracao: form.dataProximaCalibracao,
-          dataProximaCalibracao: form.dataProximaCalibracao,
-          Numero_Certificado: form.certificado.trim(),
-          certificado: form.certificado.trim(),
+          Capacidade: form.capacidade.trim(),
+          capacidade: form.capacidade.trim(),
+          Criterio_Aceitacao: form.criterioAceitacao.trim(),
+          criterioAceitacao: form.criterioAceitacao.trim(),
+          Numero_Serie: form.numeroSerie.trim(),
+          numeroSerie: form.numeroSerie.trim(),
+          Certificado_RBC: form.certificadoRbc.trim(),
+          certificado: form.certificadoRbc.trim(),
           Laboratorio: form.laboratorio.trim(),
           laboratorio: form.laboratorio.trim(),
-          Criterio_Aceitacao: form.criterioAceitacao,
-          criterioAceitacao: form.criterioAceitacao,
-          Incerteza: form.incerteza,
-          incerteza: form.incerteza,
+          Setor: form.setor,
+          setor: form.setor,
+          Operador_Responsavel: form.operador.trim(),
+          operador: form.operador.trim(),
+          responsavel: form.operador.trim(),
+          Data_Calibracao: form.dataCalibracao,
+          dataUltimaCalibracao: form.dataCalibracao,
+          Vencimento_Calibracao: form.vencimentoCalibracao,
+          dataProximaCalibracao: form.vencimentoCalibracao,
+          Data_Checagem: form.dataChecagem,
+          Vencimento_Checagem: form.vencimentoChecagem,
           Status: form.status,
           status: form.status,
           Observacoes: form.observacoes.trim(),
@@ -420,7 +443,7 @@ const CalibracaoModule = {
         const res = await postToAppsScript(payload);
         console.log("Resposta da gravação:", res);
 
-        // ATUALIZAÇÃO REATIVA IMEDIATA NA TELA (Sem depender de cache)
+        // Atualização Reativa no Estado Local
         const tagAlvo = form.tag.trim().toUpperCase();
         const indexExistente = instrumentos.value.findIndex(i => String(i.tag || i.id).toUpperCase() === tagAlvo);
         
@@ -429,17 +452,20 @@ const CalibracaoModule = {
           tag: form.tag.trim(),
           instrumento: form.instrumento.trim(),
           modelo: form.modelo.trim(),
-          setor: form.setor,
-          periodicidade: form.periodicidade,
-          dataUltimaCalibracao: form.dataUltimaCalibracao,
-          dataProximaCalibracao: form.dataProximaCalibracao,
-          certificado: form.certificado.trim(),
+          capacidade: form.capacidade.trim(),
+          criterioAceitacao: form.criterioAceitacao.trim(),
+          numeroSerie: form.numeroSerie.trim(),
+          certificadoRbc: form.certificadoRbc.trim(),
           laboratorio: form.laboratorio.trim(),
-          criterioAceitacao: form.criterioAceitacao,
-          incerteza: form.incerteza,
+          setor: form.setor,
+          operador: form.operador.trim(),
+          dataCalibracao: form.dataCalibracao,
+          vencimentoCalibracao: form.vencimentoCalibracao,
+          dataChecagem: form.dataChecagem,
+          vencimentoChecagem: form.vencimentoChecagem,
           status: form.status,
           observacoes: form.observacoes.trim(),
-          statusCalculado: statusInstrumentoCalibracao(form.dataProximaCalibracao, form.status)
+          statusCalculado: statusInstrumentoCalibracao(form.vencimentoCalibracao, form.status)
         };
 
         if (indexExistente !== -1) {
@@ -460,11 +486,11 @@ const CalibracaoModule = {
     }
 
     async function registrarChecagem180d(inst) {
-      const resp = confirm(`Registrar checagem intermediária de 180 dias para o instrumento ${inst.tag}?`);
+      const resp = confirm(`Registrar checagem de 180 dias para o instrumento ${inst.tag}?`);
       if (!resp) return;
       
       const hoje = new Date().toISOString().slice(0, 10);
-      const novoVenc = calcularVencimentoChecagem(hoje, inst.periodicidade);
+      const novoVenc = calcularVencimentoChecagem(hoje, "Semestral");
 
       try {
         await postToAppsScript({
@@ -474,14 +500,15 @@ const CalibracaoModule = {
           tag: inst.tag,
           TAG: inst.tag,
           dataChecagem: hoje,
-          dataProximaCalibracao: novoVenc,
-          usuario: props.user?.nome || "Responsável Metrologia",
+          Data_Checagem: hoje,
+          vencimentoChecagem: novoVenc,
+          Vencimento_Checagem: novoVenc,
+          usuario: getNomeOperadorAtivo(),
           empresaId: "HIDROGERON"
         });
 
-        inst.dataUltimaCalibracao = hoje;
-        inst.dataProximaCalibracao = novoVenc;
-        inst.statusCalculado = statusInstrumentoCalibracao(novoVenc, inst.status);
+        inst.dataChecagem = hoje;
+        inst.vencimentoChecagem = novoVenc;
         pushToast(`Checagem do instrumento ${inst.tag} registrada!`, "success");
         modalFichaAberto.value = false;
       } catch (e) {
@@ -510,7 +537,7 @@ const CalibracaoModule = {
       contadores, instrumentosFiltrados, modalFichaAberto, modalQRAberto, modalCadastroAberto,
       instrumentoSelecionado, salvando, editando, form,
       abrirFicha, abrirQR, abrirNovo, abrirEditar, salvarInstrumento, registrarChecagem180d,
-      atualizarProximoVencimento, formatarData, badgeStatusClasse
+      formatarData, badgeStatusClasse
     };
   },
   template: `
@@ -550,7 +577,7 @@ const CalibracaoModule = {
     <!-- Barra de Filtros e Busca -->
     <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex flex-col sm:flex-row gap-2 items-center justify-between">
       <div class="flex-1 w-full sm:w-auto">
-        <input v-model="busca" type="text" placeholder="Buscar por TAG, instrumento, modelo ou certificado..."
+        <input v-model="busca" type="text" placeholder="Buscar por TAG, instrumento, modelo, setor ou operador..."
           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:ring-2 focus:ring-sky-500 focus:outline-none" />
       </div>
       <div class="flex gap-2 w-full sm:w-auto">
@@ -577,16 +604,18 @@ const CalibracaoModule = {
 
     <div v-if="loading" class="flex justify-center py-12"><span class="spinner"></span></div>
 
-    <!-- Tabela de Instrumentos -->
+    <!-- Tabela de Instrumentos Fiel à Planilha -->
     <div v-else class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
       <div class="overflow-x-auto">
         <table class="w-full text-xs text-left">
           <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 text-[10px] uppercase font-bold tracking-wide">
             <tr>
-              <th class="p-3">TAG / ID</th>
+              <th class="p-3">TAG</th>
               <th class="p-3">Instrumento / Modelo</th>
+              <th class="p-3">Capacidade / Critério</th>
               <th class="p-3">Setor</th>
-              <th class="p-3">Última Calibração</th>
+              <th class="p-3">Operador</th>
+              <th class="p-3">Data Calibração</th>
               <th class="p-3">Vencimento</th>
               <th class="p-3">Status</th>
               <th class="p-3 text-center w-28">Ações</th>
@@ -599,11 +628,18 @@ const CalibracaoModule = {
               </td>
               <td class="p-3">
                 <p class="font-bold text-slate-800 text-xs">{{ inst.instrumento }}</p>
-                <p class="text-[10px] text-slate-400 mt-0.5">{{ inst.modelo || 'Sem modelo' }} · Cert: {{ inst.certificado || '—' }}</p>
+                <p class="text-[10px] text-slate-400 mt-0.5">
+                  {{ inst.modelo || 'Sem modelo' }} <span v-if="inst.certificadoRbc">· RBC: {{ inst.certificadoRbc }}</span>
+                </p>
+              </td>
+              <td class="p-3">
+                <p class="text-slate-700 font-medium">{{ inst.capacidade || '—' }}</p>
+                <p class="text-[10px] text-slate-400">{{ inst.criterioAceitacao || '—' }}</p>
               </td>
               <td class="p-3 text-slate-600 font-medium">{{ inst.setor }}</td>
-              <td class="p-3 text-slate-500">{{ formatarData(inst.dataUltimaCalibracao) }}</td>
-              <td class="p-3 font-semibold text-slate-700">{{ formatarData(inst.dataProximaCalibracao) }}</td>
+              <td class="p-3 text-slate-700 font-semibold">{{ inst.operador || '—' }}</td>
+              <td class="p-3 text-slate-500">{{ formatarData(inst.dataCalibracao) }}</td>
+              <td class="p-3 font-semibold text-slate-700">{{ formatarData(inst.vencimentoCalibracao) }}</td>
               <td class="p-3">
                 <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap inline-block" :class="badgeStatusClasse(inst.statusCalculado)">
                   {{ inst.statusCalculado }}
@@ -624,7 +660,7 @@ const CalibracaoModule = {
               </td>
             </tr>
             <tr v-if="instrumentosFiltrados.length === 0">
-              <td colspan="7" class="p-8 text-center text-slate-400 font-medium">
+              <td colspan="9" class="p-8 text-center text-slate-400 font-medium">
                 Nenhum instrumento de medição encontrado com os filtros atuais.
               </td>
             </tr>
@@ -656,58 +692,88 @@ const CalibracaoModule = {
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block font-semibold text-slate-600 mb-1">TAG / Código *</label>
-              <input v-model="form.tag" type="text" placeholder="Ex: CAL-001" class="w-full border border-slate-300 rounded-lg p-2 font-mono" />
+              <input v-model="form.tag" type="text" placeholder="Ex: CAL-001" class="w-full border border-slate-300 rounded-lg p-2 font-mono uppercase" />
             </div>
             <div>
               <label class="block font-semibold text-slate-600 mb-1">Instrumento *</label>
-              <input v-model="form.instrumento" type="text" placeholder="Ex: Alicate Amperímetro" class="w-full border border-slate-300 rounded-lg p-2" />
+              <input v-model="form.instrumento" type="text" placeholder="Ex: ALICATE AMPERÍMETRO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Modelo / Fabricante</label>
-              <input v-model="form.modelo" type="text" placeholder="Ex: ET-3810C Minipa" class="w-full border border-slate-300 rounded-lg p-2" />
+              <label class="block font-semibold text-slate-600 mb-1">Marca / Modelo</label>
+              <input v-model="form.modelo" type="text" placeholder="Ex: MINIPA/ET-3810C" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
             </div>
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Setor / Área</label>
-              <select v-model="form.setor" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
+              <label class="block font-semibold text-slate-600 mb-1">Capacidade</label>
+              <input v-model="form.capacidade" type="text" placeholder="Ex: 1.000 V / 1.000 A" class="w-full border border-slate-300 rounded-lg p-2" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Critério de Aceitação</label>
+              <input v-model="form.criterioAceitacao" type="text" placeholder="Ex: ±6%" class="w-full border border-slate-300 rounded-lg p-2" />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Número de Série</label>
+              <input v-model="form.numeroSerie" type="text" placeholder="Ex: 4638894" class="w-full border border-slate-300 rounded-lg p-2" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Certificado RBC</label>
+              <input v-model="form.certificadoRbc" type="text" placeholder="Ex: 0305A25" class="w-full border border-slate-300 rounded-lg p-2" />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Laboratório / Fornecedor</label>
+              <input v-model="form.laboratorio" type="text" placeholder="Ex: RBC / MSMI - MEDICAO" class="w-full border border-slate-300 rounded-lg p-2" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Setor</label>
+              <select v-model="form.setor" class="w-full border border-slate-300 rounded-lg p-2 bg-white uppercase">
                 <option v-for="s in setoresDisponiveis" :key="s" :value="s">{{ s }}</option>
               </select>
             </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Operador Responsável</label>
+              <input v-model="form.operador" type="text" placeholder="Ex: CARLOS / EDUARDO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+            </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Periodicidade</label>
-              <select v-model="form.periodicidade" @change="atualizarProximoVencimento" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
-                <option value="Mensal">Mensal (30 dias)</option>
-                <option value="Bimestral">Bimestral (60 dias)</option>
-                <option value="Trimestral">Trimestral (90 dias)</option>
-                <option value="Semestral">Semestral (180 dias)</option>
-                <option value="Anual">Anual (365 dias)</option>
+              <label class="block font-semibold text-slate-600 mb-1">Data Calibração</label>
+              <input v-model="form.dataCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Vencimento Calibração</label>
+              <input v-model="form.vencimentoCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-600 mb-1">Status</label>
+              <select v-model="form.status" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
+                <option value="No Prazo">No Prazo</option>
+                <option value="Em Calibração">Em Calibração</option>
+                <option value="Vencido">Vencido</option>
               </select>
             </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Última Calibração</label>
-              <input v-model="form.dataUltimaCalibracao" @change="atualizarProximoVencimento" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
-            </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Próximo Vencimento</label>
-              <input v-model="form.dataProximaCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
+              <label class="block font-semibold text-slate-600 mb-1">Data da Checagem</label>
+              <input v-model="form.dataChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
             </div>
             <div>
-              <label class="block font-semibold text-slate-600 mb-1">Nº do Certificado</label>
-              <input v-model="form.certificado" type="text" placeholder="Ex: CERT-2026-99" class="w-full border border-slate-300 rounded-lg p-2" />
+              <label class="block font-semibold text-slate-600 mb-1">Vencimento da Checagem</label>
+              <input v-model="form.vencimentoChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
             </div>
-          </div>
-
-          <div>
-            <label class="block font-semibold text-slate-600 mb-1">Laboratório / Fornecedor</label>
-            <input v-model="form.laboratorio" type="text" placeholder="Ex: Laboratório RBC Metrologia" class="w-full border border-slate-300 rounded-lg p-2" />
           </div>
 
           <div>
