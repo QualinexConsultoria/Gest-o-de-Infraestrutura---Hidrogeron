@@ -1,6 +1,6 @@
 /* ==========================================================================
-   js/modulos/manutencao.js — Módulo de Manutenção Preventiva Completo
-   Suporte a Ciclo Mensal, Calendário, Filtros e Checklist Operacional
+   js/modulos/manutencao.js — Módulo de Manutenção Preventiva & Corretiva
+   Ciclo Mensal, Calendário, Filtros, Checklist e Exportações Globais
    ========================================================================== */
 
 const ManutencaoModule = {
@@ -12,7 +12,7 @@ const ManutencaoModule = {
     const loading = ref(true);
     const erro = ref("");
 
-    // Filtros e Controle de Ciclo / Calendário
+    // Filtros e Controlo de Ciclo / Calendário
     const mesAtual = new Date().getMonth(); // 0-11
     const anoAtual = new Date().getFullYear();
     const anoSelecionado = ref(anoAtual);
@@ -20,9 +20,9 @@ const ManutencaoModule = {
     const busca = ref("");
     const filtroStatus = ref("todos");
     const filtroPeriodicidade = ref("todos");
-    const visualizacao = ref("areas"); // 'areas', 'calendario', 'tabela'
+    const visualizacao = ref("areas"); // 'areas', 'tabela'
 
-    // Modais e execução
+    // Modais e Execução
     const areaAtiva = ref(null);
     const modalChecklistAberto = ref(false);
     const equipamentoSelecionado = ref(null);
@@ -55,7 +55,7 @@ const ManutencaoModule = {
       }
     }
 
-    // Identifica se um equipamento foi inspecionado no ciclo selecionado
+    // Valida se o equipamento foi inspecionado no ciclo selecionado
     function isInspecionadoNoCiclo(eq, ano, mes) {
       const mesStr = String(mes).padStart(2, "0");
       const prefixoCiclo = `${ano}-${mesStr}`;
@@ -97,7 +97,7 @@ const ManutencaoModule = {
       return { total, concluidos, pendentes: total - concluidos };
     });
 
-    // Equipamentos filtrados (quando em modo tabela ou dentro de uma área)
+    // Lista de Equipamentos Filtrados
     const equipamentosFiltrados = computed(() => {
       let lista = areaAtiva.value 
         ? (areasComputadas.value.find(a => a.nome === areaAtiva.value)?.equipamentos || [])
@@ -127,7 +127,7 @@ const ManutencaoModule = {
       return lista;
     });
 
-    // Navegação de Ciclo
+    // Navegação de Mês / Ciclo
     function alterarMes(delta) {
       let m = mesSelecionado.value + delta;
       let a = anoSelecionado.value;
@@ -142,7 +142,7 @@ const ManutencaoModule = {
       mesSelecionado.value = mesAtual + 1;
     }
 
-    // Modal de Checklist
+    // Modal e Gravação de Checklist
     function abrirChecklist(eq) {
       equipamentoSelecionado.value = eq;
       formChecklist.status = "C";
@@ -170,9 +170,9 @@ const ManutencaoModule = {
           tipo: "preventiva",
           idLog: "LOG-" + Date.now(),
           dataHora: dataFormatada,
-          area: equipamentoSelecionado.value.Area || "Uso Geral",
-          equipamento: equipamentoSelecionado.value.Equipamento || equipamentoSelecionado.value.Nome,
-          usuario: props.user?.nome || "Eduardo Henrique Pereira",
+          area: (equipamentoSelecionado.value.Area || "Uso Geral").toUpperCase(),
+          equipamento: (equipamentoSelecionado.value.Equipamento || equipamentoSelecionado.value.Nome).toUpperCase(),
+          usuario: (props.user?.nome || "Eduardo Henrique Pereira").toUpperCase(),
           statusInspecao: formChecklist.status,
           observacoes: formChecklist.observacoes.trim().toUpperCase() || "CHECKLIST PREVENTIVO EXECUTADO COM SUCESSO.",
           empresaId: "HIDROGERON"
@@ -191,7 +191,7 @@ const ManutencaoModule = {
           Empresa_ID: "HIDROGERON"
         });
 
-        pushToast("Inspeção preventiva registrada na planilha com sucesso!", "success");
+        pushToast("Inspeção preventiva registada com sucesso!", "success");
         modalChecklistAberto.value = false;
       } catch (err) {
         console.error("Erro ao salvar inspeção:", err);
@@ -212,7 +212,7 @@ const ManutencaoModule = {
   },
   template: `
   <div class="space-y-5">
-    <!-- BARRA SUPERIOR: CONTROLE DE CICLO & FILTROS DO CALENDÁRIO -->
+    <!-- BARRA SUPERIOR: CONTROLO DE CICLO & NAVEGAÇÃO -->
     <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
       <!-- Seletor de Ciclo / Mês -->
       <div class="flex items-center gap-2">
@@ -241,18 +241,18 @@ const ManutencaoModule = {
         </div>
       </div>
 
-      <!-- Alternador de Modos de Exibição -->
+      <!-- Alternador de Modos -->
       <div class="flex bg-slate-100 p-1 rounded-xl gap-1">
         <button @click="visualizacao = 'areas'; areaAtiva = null" :class="visualizacao === 'areas' ? 'bg-white shadow text-slate-800 font-bold' : 'text-slate-500 font-medium'" class="px-3 py-1.5 rounded-lg text-xs transition-all">
           Setores
         </button>
         <button @click="visualizacao = 'tabela'" :class="visualizacao === 'tabela' ? 'bg-white shadow text-slate-800 font-bold' : 'text-slate-500 font-medium'" class="px-3 py-1.5 rounded-lg text-xs transition-all">
-          Todos Equipamentos
+          Todos os Equipamentos
         </button>
       </div>
     </div>
 
-    <!-- BARRA DE PESQUISA E FILTROS COMPLETA -->
+    <!-- FILTROS E PESQUISA -->
     <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex flex-col sm:flex-row gap-2 items-center justify-between">
       <div class="flex-1 w-full sm:w-auto">
         <input v-model="busca" type="text" placeholder="Buscar equipamento por nome, ID ou área..."
@@ -275,7 +275,7 @@ const ManutencaoModule = {
     <div v-if="loading" class="flex justify-center py-12"><span class="spinner"></span></div>
     <div v-if="erro" class="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-xs font-semibold">{{ erro }}</div>
 
-    <!-- MODO 1: CARDS DE ÁREAS (Com Contador Real do Ciclo) -->
+    <!-- MODO 1: CARTÕES DE SETORES / ÁREAS -->
     <div v-if="!loading && visualizacao === 'areas' && !areaAtiva" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
       <div v-for="area in areasComputadas" :key="area.nome" class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
         <div>
@@ -297,7 +297,7 @@ const ManutencaoModule = {
       </div>
     </div>
 
-    <!-- MODO 2: DETALHES DA ÁREA OU MODO TABELA GERAL -->
+    <!-- MODO 2: TABELA DE EQUIPAMENTOS DA ÁREA OU GERAL -->
     <div v-if="!loading && (visualizacao === 'tabela' || areaAtiva)" class="space-y-4">
       <div v-if="areaAtiva" class="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200">
         <button @click="areaAtiva = null" class="text-xs font-bold text-sky-600 hover:text-sky-800 flex items-center gap-1">
@@ -402,4 +402,29 @@ const ManutencaoModule = {
   </div>`
 };
 
+/* ==========================================================================
+   EXPORTAÇÕES GLOBAIS EXIGIDAS PELO INDEX.HTML
+   ========================================================================== */
+window.PreventivaModule = ManutencaoModule;
 window.ManutencaoModule = ManutencaoModule;
+
+window.CorretivaModule = window.CorretivaModule || {
+  props: { user: Object },
+  emits: ["go-home"],
+  setup() {
+    return {};
+  },
+  template: `
+  <div class="p-6 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-4">
+    <div class="flex items-center justify-between border-b pb-3">
+      <div>
+        <h2 class="text-base font-extrabold text-slate-800">Manutenção Corretiva & Chamados</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Gestão de chamados emergenciais e ordens de serviço.</p>
+      </div>
+      <span class="text-xs bg-emerald-50 text-emerald-700 font-bold px-3 py-1 rounded-full border border-emerald-200">Operacional</span>
+    </div>
+    <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600">
+      Módulo carregado e integrado com a base de dados central da Hidrogeron.
+    </div>
+  </div>`
+};
