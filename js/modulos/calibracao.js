@@ -223,7 +223,7 @@ const EtiquetaQRModal = {
 };
 
 /* ==========================================================================
-   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO
+   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO (ATUALIZAÇÃO REATIVA IMEDIATA)
    ========================================================================== */
 const CalibracaoModule = {
   props: { user: Object },
@@ -419,11 +419,38 @@ const CalibracaoModule = {
 
         const res = await postToAppsScript(payload);
         console.log("Resposta da gravação:", res);
+
+        // ATUALIZAÇÃO REATIVA IMEDIATA NA TELA (Sem depender de cache)
+        const tagAlvo = form.tag.trim().toUpperCase();
+        const indexExistente = instrumentos.value.findIndex(i => String(i.tag || i.id).toUpperCase() === tagAlvo);
+        
+        const itemAtualizado = {
+          id: form.id || form.tag.trim(),
+          tag: form.tag.trim(),
+          instrumento: form.instrumento.trim(),
+          modelo: form.modelo.trim(),
+          setor: form.setor,
+          periodicidade: form.periodicidade,
+          dataUltimaCalibracao: form.dataUltimaCalibracao,
+          dataProximaCalibracao: form.dataProximaCalibracao,
+          certificado: form.certificado.trim(),
+          laboratorio: form.laboratorio.trim(),
+          criterioAceitacao: form.criterioAceitacao,
+          incerteza: form.incerteza,
+          status: form.status,
+          observacoes: form.observacoes.trim(),
+          statusCalculado: statusInstrumentoCalibracao(form.dataProximaCalibracao, form.status)
+        };
+
+        if (indexExistente !== -1) {
+          instrumentos.value[indexExistente] = itemAtualizado;
+        } else {
+          instrumentos.value.unshift(itemAtualizado);
+        }
+
         pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
         
-        // Força recarregamento sem cache da planilha
-        await carregar(true);
       } catch (e) {
         console.error("Erro ao salvar:", e);
         pushToast("Erro ao gravar instrumento.", "error");
@@ -454,10 +481,9 @@ const CalibracaoModule = {
 
         inst.dataUltimaCalibracao = hoje;
         inst.dataProximaCalibracao = novoVenc;
-        inst.statusCalculado = "No Prazo";
+        inst.statusCalculado = statusInstrumentoCalibracao(novoVenc, inst.status);
         pushToast(`Checagem do instrumento ${inst.tag} registrada!`, "success");
         modalFichaAberto.value = false;
-        await carregar(true);
       } catch (e) {
         console.error(e);
         pushToast("Erro ao registrar checagem.", "error");
@@ -567,7 +593,7 @@ const CalibracaoModule = {
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <tr v-for="inst in instrumentosFiltrados" :key="inst.id" class="hover:bg-slate-50/80 transition-colors">
+            <tr v-for="inst in instrumentosFiltrados" :key="inst.id || inst.tag" class="hover:bg-slate-50/80 transition-colors">
               <td class="p-3">
                 <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded">{{ inst.tag }}</span>
               </td>
