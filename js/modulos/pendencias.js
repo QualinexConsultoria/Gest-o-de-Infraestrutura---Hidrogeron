@@ -1,4 +1,12 @@
-/* ==========================================================================
+/* ==========================================================================if (typeof statusInstrumentoCalibracao === "undefined") {
+  window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
+    if (String(statusManual || "").toLowerCase().indexOf("calibra") !== -1) return "Em Calibração";
+    if (!dataVenc) return "No Prazo";
+    var diff = Math.ceil((new Date(dataVenc).getTime() - new Date().setHours(0,0,0,0)) / 86400000);
+    return diff < 0 ? "Vencido" : (diff <= 45 ? "Atenção (< 45d)" : "No Prazo");
+  };
+  var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
+}
    js/modulos/pendencias.js — Cockpit da página inicial (HomeHub)
    Menu modular pós-login com KPIs operacionais (chamados em aberto,
    calibrações vencidas, RNCs pendentes) e o alerta automático de RNC no
