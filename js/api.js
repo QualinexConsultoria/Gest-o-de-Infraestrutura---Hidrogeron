@@ -5,7 +5,7 @@
    com o parâmetro empresaId (preparação para múltiplos tenants no mesmo
    backend — hoje só existe a empresa HIDROGERON).
    ========================================================================== */
-cconst API_URL = "https://script.google.com/macros/s/SEU_ID_DO_SCRIPT_AQUI/exec";
+cconst API_URL = "https://script.google.com/macros/s/AKfycbxeM7DmvSrJW_uzm30LRwZsZnlQQO5MNwNzmC75dLd5lwJB1MFfZnQRIHuF2ihBl0_U/exec";
 window.extrairIdCalibracaoDoHash = function() {
   var hash = window.location.hash || "";
   var match = hash.match(/calibracao\/([^\/?#]+)/i);
