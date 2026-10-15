@@ -73,7 +73,7 @@ const CalibracaoModule = {
           const dtVenc = item.Vencimento_Calibracao || item.vencimentoCalibracao || item.Vencimento || item.vencimento || "";
           const dtCal = item.Data_Calibracao || item.dataCalibracao || item.Data || item.data || "";
           const statusCalculado = calcularStatus(dtVenc, item.Status || item.status);
-          const linkLaudo = item.Anexo_Laudo || item.anexoUrl || item.Certificado_Link || item.Link_Certificado || item.Link || "";
+          const linkLaudo = item.Link_Laudo_PDF || item.Anexo_Laudo || item.anexoUrl || item.Certificado_Link || item.Link_Certificado || "";
 
           return {
             ...item,
@@ -91,7 +91,7 @@ const CalibracaoModule = {
             vencimento: dtVenc ? String(dtVenc).slice(0, 10) : "",
             dataChecagem: item.Data_Checagem ? String(item.Data_Checagem).slice(0, 10) : (item.dataChecagem ? String(item.dataChecagem).slice(0, 10) : ""),
             vencimentoChecagem: item.Vencimento_Checagem ? String(item.Vencimento_Checagem).slice(0, 10) : (item.vencimentoChecagem ? String(item.vencimentoChecagem).slice(0, 10) : ""),
-            observacoes: item.Observacoes || item.observacoes || "",
+            observacoes: item.Obs_Checagem || item.Observacoes || item.observacoes || "",
             anexoUrl: linkLaudo,
             statusCalculado
           };
@@ -224,8 +224,8 @@ const CalibracaoModule = {
           anexoNome: formInstrumento.anexoNome
         };
 
-        // Se houver arquivo Base64 pequeno, inclui; se não, envia apenas o link e metadados
-        if (formInstrumento.anexoBase64 && formInstrumento.anexoBase64.length < 500000) {
+        // Se houver arquivo selecionado menor que 800KB, envia o Base64
+        if (formInstrumento.anexoBase64 && formInstrumento.anexoBase64.length < 800000) {
           payload.anexoBase64 = formInstrumento.anexoBase64;
         }
 
@@ -233,7 +233,7 @@ const CalibracaoModule = {
         try {
           resp = await postToAppsScript(payload);
         } catch (postErr) {
-          // Se falhou por tamanho do payload com arquivo, tenta enviar de imediato sem o base64
+          // Se o envio com anexo falhar por tamanho, grava os dados textuais para não perder nada
           if (payload.anexoBase64) {
             delete payload.anexoBase64;
             resp = await postToAppsScript(payload);
@@ -242,7 +242,7 @@ const CalibracaoModule = {
           }
         }
 
-        // Atualização da tabela local
+        // Atualização reativa imediata na tabela
         const idx = instrumentos.value.findIndex(i => i.tag.toUpperCase() === payload.tag);
         const itemAtualizado = {
           tag: payload.tag,
@@ -260,7 +260,7 @@ const CalibracaoModule = {
           dataChecagem: payload.dataChecagem,
           vencimentoChecagem: payload.vencimentoChecagem,
           observacoes: payload.observacoes,
-          anexoUrl: (resp && resp.linkCertificado) ? resp.linkCertificado : payload.anexoUrl,
+          anexoUrl: (resp && resp.linkCertificado) ? resp.linkCertificado : (payload.anexoUrl || formInstrumento.anexoUrl),
           statusCalculado: calcularStatus(payload.vencimentoCalibracao, payload.status)
         };
 
@@ -273,12 +273,12 @@ const CalibracaoModule = {
         pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
 
-        // Atualiza base completa em segundo plano
-        setTimeout(() => carregarDados(true), 800);
+        // Atualização suave em segundo plano
+        setTimeout(() => carregarDados(true), 1000);
 
       } catch (err) {
         console.error("Erro ao salvar:", err);
-        pushToast("Erro ao gravar instrumento. Verifique a conexão com o servidor.", "error");
+        pushToast("Erro ao gravar instrumento. Verifique o servidor.", "error");
       } finally {
         gravando.value = false;
       }
