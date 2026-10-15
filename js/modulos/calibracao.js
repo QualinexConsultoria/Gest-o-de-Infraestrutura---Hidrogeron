@@ -38,7 +38,6 @@ const CalibracaoModule = {
       vencimentoChecagem: "",
       status: "NO PRAZO",
       observacoes: "",
-      // Anexo do Certificado / Laudo
       anexoUrl: "",
       anexoNome: "",
       anexoBase64: ""
