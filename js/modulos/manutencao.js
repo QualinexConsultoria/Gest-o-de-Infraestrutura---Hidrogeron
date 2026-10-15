@@ -1,6 +1,6 @@
 /* ==========================================================================
    js/modulos/manutencao.js — Matriz Cronograma de Manutenção Preventiva
-   Layout Industrial Oficial: Todos os 12 Meses (JAN a DEZ)
+   Layout Industrial: Todos os 12 Meses (JAN a DEZ)
    Células Verdes (Feitas) e Vermelhas (Pendentes/Vencidas)
    ========================================================================== */
 
@@ -13,18 +13,15 @@ const ManutencaoModule = {
     const loading = ref(true);
     const erro = ref("");
 
-    // Ano selecionado do Cronograma
     const anoAtual = new Date().getFullYear();
     const mesAtualIndex = new Date().getMonth(); // 0 a 11
     const anoSelecionado = ref(anoAtual);
 
-    // Filtros
     const busca = ref("");
     const filtroSetor = ref("todos");
     const filtroPeriodicidade = ref("todos");
-    const filtroStatus = ref("todos"); // 'todos', 'pendentes', 'concluidos'
+    const filtroStatus = ref("todos");
 
-    // Modal de Checklist
     const modalChecklistAberto = ref(false);
     const equipamentoSelecionado = ref(null);
     const mesAlvoInspecao = ref(mesAtualIndex + 1);
@@ -56,18 +53,27 @@ const ManutencaoModule = {
       erro.value = "";
       try {
         const raw = await getInitialData(force);
-        const base = (raw && raw.data) ? raw.data : raw;
-        equipamentos.value = base.equipamentos || base.Equipamentos || [];
-        logs.value = base.preventivas || base.Preventivas || [];
+        const base = (raw && raw.data) ? raw.data : (raw || {});
+        
+        const eqList = base.equipamentos || base.Equipamentos || [];
+        equipamentos.value = Array.isArray(eqList) ? eqList : [];
+
+        const logList = base.preventivas || base.Preventivas || [];
+        logs.value = Array.isArray(logList) ? logList : [];
+
       } catch (e) {
-        console.error("Erro ao carregar preventiva:", e);
-        erro.value = "Não foi possível carregar o cronograma de manutenção preventiva.";
+        console.warn("Aviso ao carregar dados do cronograma:", e);
+        if (!equipamentos.value.length && window.lastLoadedData) {
+          equipamentos.value = window.lastLoadedData.equipamentos || [];
+          logs.value = window.lastLoadedData.preventivas || [];
+        } else {
+          erro.value = "Não foi possível carregar o cronograma de manutenção preventiva.";
+        }
       } finally {
         loading.value = false;
       }
     }
 
-    // Setores únicos disponíveis para o filtro
     const setoresDisponiveis = computed(() => {
       const s = new Set();
       equipamentos.value.forEach(eq => {
@@ -77,7 +83,6 @@ const ManutencaoModule = {
       return Array.from(s).sort();
     });
 
-    // Regra se o mês é aplicável para a periodicidade do equipamento
     function isMesPlanejado(periodicidade, mesNum) {
       const p = String(periodicidade || "MENSAL").toUpperCase().trim();
       if (p === "MENSAL") return true;
@@ -88,7 +93,6 @@ const ManutencaoModule = {
       return true;
     }
 
-    // Verifica status de um mês específico
     function getStatusMes(eq, mesNum) {
       const p = eq.Periodicidade || eq.periodicidade || "Mensal";
       const planejado = isMesPlanejado(p, mesNum);
@@ -116,7 +120,6 @@ const ManutencaoModule = {
         };
       }
 
-      // Se não foi feito: verifica se o mês já passou ou é o mês vigente
       const mesPassadoOuAtual = (anoSelecionado.value < anoAtual) || (anoSelecionado.value === anoAtual && (mesNum - 1) <= mesAtualIndex);
 
       if (mesPassadoOuAtual) {
@@ -128,7 +131,6 @@ const ManutencaoModule = {
         };
       }
 
-      // Mês futuro ainda por realizar
       return {
         tipo: "futuro",
         label: "P",
@@ -137,7 +139,6 @@ const ManutencaoModule = {
       };
     }
 
-    // Processa a matriz completa de equipamentos com os 12 meses
     const matrizEquipamentos = computed(() => {
       return equipamentos.value.map(eq => {
         const mesesStatus = meses.map(m => ({
@@ -157,7 +158,6 @@ const ManutencaoModule = {
       });
     });
 
-    // Filtros aplicados à matriz
     const equipamentosFiltrados = computed(() => {
       let lista = matrizEquipamentos.value;
 
@@ -186,7 +186,6 @@ const ManutencaoModule = {
       return lista;
     });
 
-    // Contadores Totais do Ano
     const totaisGerais = computed(() => {
       let totalPendentes = 0;
       let totalConcluidos = 0;
@@ -197,7 +196,6 @@ const ManutencaoModule = {
       return { totalPendentes, totalConcluidos, maquinas: equipamentos.value.length };
     });
 
-    // Modal de Checklist
     function abrirInspecao(eq, mesNum) {
       equipamentoSelecionado.value = eq;
       mesAlvoInspecao.value = mesNum || (mesAtualIndex + 1);
@@ -268,9 +266,8 @@ const ManutencaoModule = {
   },
   template: `
   <div class="space-y-4">
-    <!-- BARRA SUPERIOR DE CONTROLO DO CRONOGRAMA ANUAL -->
+    <!-- BARRA SUPERIOR DO CRONOGRAMA ANUAL -->
     <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-      <!-- Seletor do Ano -->
       <div class="flex items-center gap-3">
         <button @click="anoSelecionado--" class="btn-tap p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs">◀</button>
         <div class="flex items-center gap-2 px-4 py-2 bg-sky-50 border border-sky-200 rounded-xl">
@@ -280,7 +277,6 @@ const ManutencaoModule = {
         <button @click="anoSelecionado++" class="btn-tap p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs">▶</button>
       </div>
 
-      <!-- Resumo Cromático de Indicadores -->
       <div class="flex flex-wrap items-center gap-2.5">
         <div class="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl">
           <span class="w-3 h-3 rounded bg-emerald-500 flex items-center justify-center text-[9px] text-white font-bold">✓</span>
@@ -296,7 +292,7 @@ const ManutencaoModule = {
       </div>
     </div>
 
-    <!-- FILTROS E BUSCA INDUSTRIAL -->
+    <!-- FILTROS E BUSCA -->
     <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex flex-col sm:flex-row gap-2 items-center justify-between">
       <div class="flex-1 w-full sm:w-auto">
         <input v-model="busca" type="text" placeholder="Buscar por máquina, ID, setor ou modelo..."
@@ -323,7 +319,7 @@ const ManutencaoModule = {
     <div v-if="loading" class="flex justify-center py-12"><span class="spinner"></span></div>
     <div v-if="erro" class="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-xs font-semibold">{{ erro }}</div>
 
-    <!-- MATRIZ OFICIAL: EQUIPAMENTOS X 12 MESES (JAN a DEZ) -->
+    <!-- MATRIZ: EQUIPAMENTOS X 12 MESES -->
     <div v-if="!loading" class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
       <div class="overflow-x-auto">
         <table class="w-full text-xs text-left border-collapse">
@@ -333,7 +329,6 @@ const ManutencaoModule = {
               <th class="p-3 min-w-[200px]">Equipamento / Máquina</th>
               <th class="p-3 min-w-[120px]">Setor</th>
               <th class="p-3 text-center">Freq.</th>
-              <!-- Cabeçalho dos 12 Meses -->
               <th v-for="m in meses" :key="m.num" class="p-2 text-center w-12" :class="m.num === (mesAtualIndex + 1) ? 'bg-sky-100 text-sky-900 border-x border-sky-200' : ''">
                 {{ m.sigla }}
               </th>
@@ -354,7 +349,6 @@ const ManutencaoModule = {
                 </span>
               </td>
 
-              <!-- Células dos 12 Meses Cromáticas -->
               <td v-for="m in eq.mesesStatus" :key="m.num" class="p-1 text-center" :class="m.num === (mesAtualIndex + 1) ? 'bg-sky-50/50 border-x border-sky-100' : ''">
                 <button @click="m.status.tipo !== 'nao_aplicavel' ? abrirInspecao(eq, m.num) : null"
                   :disabled="m.status.tipo === 'nao_aplicavel'"
@@ -379,7 +373,7 @@ const ManutencaoModule = {
       </div>
     </div>
 
-    <!-- MODAL CHECKLIST PREVENTIVO -->
+    <!-- MODAL CHECKLIST -->
     <div v-if="modalChecklistAberto" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="modalChecklistAberto = false">
       <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto text-xs">
         <div class="flex items-center justify-between border-b pb-2">

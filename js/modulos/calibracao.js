@@ -1,270 +1,27 @@
 /* ==========================================================================
-   js/modulos/calibracao.js — Módulo de Calibração & Medição (RSG-7601-02)
-   100% Fiel à Planilha Cadastro de Equipamentos - Manutenção Hidrogeron
+   js/modulos/calibracao.js — Módulo de Calibração & Medição
+   Controle Metrológico, Certificados RBC, Vencimentos e Filtros
    ========================================================================== */
 
-// Helpers Globais (Cross-Module)
-window.calcularVencimentoChecagem = function(dataChecagem, periodicidade) {
-  if (!dataChecagem) return "";
-  var d = new Date(dataChecagem);
-  if (isNaN(d.getTime())) return "";
-  
-  var p = String(periodicidade || "").trim().toLowerCase();
-  var dias = 180;
-  if (p === "mensal") dias = 30;
-  else if (p === "bimestral") dias = 60;
-  else if (p === "trimestral") dias = 90;
-  else if (p === "semestral") dias = 180;
-  else if (p === "anual") dias = 365;
-
-  var venc = new Date(d.getTime() + (dias * 24 * 60 * 60 * 1000));
-  return venc.toISOString().slice(0, 10);
-};
-
-window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
-  var sm = String(statusManual || "").toLowerCase();
-  if (sm.indexOf("calibra") !== -1) return "Em Calibração";
-  if (!dataVenc) return "No Prazo";
-  
-  var dVenc = new Date(dataVenc);
-  if (isNaN(dVenc.getTime())) return "No Prazo";
-  
-  var hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-  dVenc.setHours(0, 0, 0, 0);
-  var diffDias = Math.ceil((dVenc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
-  
-  if (diffDias < 0) return "Vencido";
-  if (diffDias <= 45) return "Atenção (< 45d)";
-  return "No Prazo";
-};
-
-window.extrairIdCalibracaoDoHash = function() {
-  var hash = window.location.hash || "";
-  var match = hash.match(/calibracao\/([^\/?#]+)/i);
-  return match ? decodeURIComponent(match[1]) : null;
-};
-
-var calcularVencimentoChecagem = window.calcularVencimentoChecagem;
-var statusInstrumentoCalibracao = window.statusInstrumentoCalibracao;
-var extrairIdCalibracaoDoHash = window.extrairIdCalibracaoDoHash;
-
-/* ==========================================================================
-   NORMALIZAÇÃO DE DADOS (LEITURA DA PLANILHA)
-   ========================================================================== */
-function normalizeCalibracao(c) {
-  var tag = (c.TAG || c.tag || c.Tag || c.Codigo || c.codigo || c.ID_Instrumento || "").toString().trim().toUpperCase();
-  var id = (c.ID_Instrumento || c.id_instrumento || c.ID || c.id || tag || uid()).toString().trim().toUpperCase();
-  var instNome = (c.Instrumento || c.instrumento || c.Equipamento || c.equipamento || c.Nome || c.Descricao || "INSTRUMENTO").toString().trim().toUpperCase();
-  var modelo = (c.Marca_Modelo || c.marca_modelo || c.Modelo || c.modelo || "").toString().trim().toUpperCase();
-  var capacidade = (c.Capacidade || c.capacidade || "").toString().trim().toUpperCase();
-  var criterio = (c.Criterio_Aceitacao || c.criterio_aceitacao || c.Criterio || "").toString().trim().toUpperCase();
-  var numSerie = (c.Numero_Serie || c.numero_serie || c.Serie || "").toString().trim().toUpperCase();
-  var certRbc = (c.Certificado_RBC || c.certificado_rbc || c.Certificado || c.Numero_Certificado || "").toString().trim().toUpperCase();
-  var laboratorio = (c.Laboratorio || c.laboratorio || c.Fornecedor || c.fornecedor || "").toString().trim().toUpperCase();
-  var setor = (c.Setor || c.setor || "GERAL").toString().trim().toUpperCase();
-  var operador = (c.Operador_Responsavel || c.operador_responsavel || c.Operador || c.responsavel || c.Responsavel || "").toString().trim().toUpperCase();
-  
-  var dtCal = c.Data_Calibracao || c.data_calibracao || c.Data_Ultima_Calibracao || "";
-  var vencCal = c.Vencimento_Calibracao || c.vencimento_calibracao || c.Data_Proxima_Calibracao || "";
-  var dtChec = c.Data_Checagem || c.data_checagem || "";
-  var vencChec = c.Vencimento_Checagem || c.vencimento_checagem || "";
-  var status = (c.Status || c.status || "NO PRAZO").toString().trim();
-  var obs = (c.Observacoes || c.observacoes || "").toString().trim().toUpperCase();
-
-  return {
-    id: id,
-    tag: tag || id,
-    instrumento: instNome,
-    modelo: modelo,
-    capacidade: capacidade,
-    criterioAceitacao: criterio,
-    numeroSerie: numSerie,
-    certificadoRbc: certRbc,
-    laboratorio: laboratorio,
-    setor: setor,
-    operador: operador,
-    dataCalibracao: dtCal ? String(dtCal).slice(0, 10) : "",
-    vencimentoCalibracao: vencCal ? String(vencCal).slice(0, 10) : "",
-    dataChecagem: dtChec ? String(dtChec).slice(0, 10) : "",
-    vencimentoChecagem: vencChec ? String(vencChec).slice(0, 10) : "",
-    status: status,
-    observacoes: obs
-  };
-}
-
-/* ==========================================================================
-   MODAL DE FICHA TÉCNICA E LAUDO (RSG-7601-02)
-   ========================================================================== */
-const FichaInstrumentoModal = {
-  props: { instrumento: Object },
-  emits: ["fechar", "editar", "registrar-checagem", "gerar-qr", "ver-laudo"],
-  setup(props) {
-    function formatarData(d) {
-      if (!d) return "—";
-      var dt = new Date(d);
-      return isNaN(dt.getTime()) ? d : dt.toLocaleDateString("pt-BR");
-    }
-
-    function badgeClasse(st) {
-      var s = String(st || "").toLowerCase();
-      if (s.indexOf("prazo") !== -1) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-      if (s.indexOf("aten") !== -1) return "bg-amber-50 text-amber-700 border-amber-200";
-      if (s.indexOf("venc") !== -1) return "bg-rose-50 text-rose-700 border-rose-200";
-      return "bg-sky-50 text-sky-700 border-sky-200";
-    }
-
-    return { formatarData, badgeClasse };
-  },
-  template: `
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="$emit('fechar')">
-    <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-      <div class="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-        <div>
-          <span class="text-xs font-mono font-bold text-sky-700 bg-sky-100 px-2.5 py-0.5 rounded-full">{{ instrumento.tag }}</span>
-          <h3 class="font-extrabold text-slate-800 text-base mt-1">{{ instrumento.instrumento }}</h3>
-        </div>
-        <button @click="$emit('fechar')" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-2">✕</button>
-      </div>
-
-      <div class="p-5 space-y-4 overflow-y-auto text-xs">
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Setor / Local</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.setor }}</p>
-          </div>
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Marca / Modelo</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.modelo || '—' }}</p>
-          </div>
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Status</p>
-            <span class="inline-block mt-0.5 px-2 py-0.5 rounded-full font-bold border" :class="badgeClasse(instrumento.statusCalculado)">
-              {{ instrumento.statusCalculado }}
-            </span>
-          </div>
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Data Calibração</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.dataCalibracao) }}</p>
-          </div>
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Vencimento Calibração</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ formatarData(instrumento.vencimentoCalibracao) }}</p>
-          </div>
-          <div>
-            <p class="text-slate-400 font-semibold uppercase text-[10px]">Operador Responsável</p>
-            <p class="font-bold text-slate-700 mt-0.5">{{ instrumento.operador || '—' }}</p>
-          </div>
-        </div>
-
-        <div class="border border-slate-200 p-3 rounded-xl space-y-2">
-          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px]">Especificações & Metrologia</p>
-          <div class="grid grid-cols-2 gap-2 text-slate-600">
-            <p><strong>Capacidade:</strong> {{ instrumento.capacidade || '—' }}</p>
-            <p><strong>Critério Aceitação:</strong> {{ instrumento.criterioAceitacao || '—' }}</p>
-            <p><strong>Nº de Série:</strong> {{ instrumento.numeroSerie || '—' }}</p>
-            <p><strong>Certificado RBC:</strong> {{ instrumento.certificadoRbc || '—' }}</p>
-            <p><strong>Laboratório / Forn.:</strong> {{ instrumento.laboratorio || '—' }}</p>
-            <p><strong>Última Checagem:</strong> {{ formatarData(instrumento.dataChecagem) }}</p>
-            <p class="col-span-2"><strong>Vencimento Checagem:</strong> {{ formatarData(instrumento.vencimentoChecagem) }}</p>
-          </div>
-        </div>
-
-        <div v-if="instrumento.observacoes" class="border border-slate-200 p-3 rounded-xl">
-          <p class="font-bold text-slate-700 uppercase tracking-wide text-[10px] mb-1">Observações</p>
-          <p class="text-slate-600">{{ instrumento.observacoes }}</p>
-        </div>
-
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2">
-          <button @click="$emit('ver-laudo')" class="btn-tap flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-lg text-xs">
-            📄 Laudo
-          </button>
-          <button @click="$emit('gerar-qr')" class="btn-tap flex items-center justify-center gap-1 bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 font-semibold py-2.5 rounded-lg text-xs">
-            🏷️ Etiqueta
-          </button>
-          <button @click="$emit('registrar-checagem')" class="btn-tap flex items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-xs">
-            ✅ Checagem
-          </button>
-          <button @click="$emit('editar')" class="btn-tap flex items-center justify-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-lg text-xs">
-            ✏️ Editar
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>`
-};
-
-/* ==========================================================================
-   MODAL DE ETIQUETA QR CODE
-   ========================================================================== */
-const EtiquetaQRModal = {
-  props: { instrumento: Object },
-  emits: ["fechar"],
-  setup(props) {
-    const qrUrl = computed(() => {
-      const code = encodeURIComponent(props.instrumento.tag || props.instrumento.id);
-      return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${code}`;
-    });
-    function imprimir() { window.print(); }
-    return { qrUrl, imprimir };
-  },
-  template: `
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="$emit('fechar')">
-    <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-5 text-center space-y-4">
-      <h3 class="font-bold text-slate-800 text-sm">Etiqueta Metrológica com QR Code</h3>
-      <div id="etiqueta-print" class="border-2 border-dashed border-slate-300 p-4 rounded-xl flex flex-col items-center space-y-2 bg-slate-50">
-        <img :src="qrUrl" class="w-32 h-32 rounded-lg border border-slate-200 shadow-sm" alt="QR Code" />
-        <p class="font-extrabold text-base text-slate-800 font-mono tracking-wider">{{ instrumento.tag }}</p>
-        <p class="font-semibold text-xs text-slate-700">{{ instrumento.instrumento }}</p>
-        <p class="text-[10px] text-slate-500">Setor: {{ instrumento.setor }}</p>
-        <div class="text-[10px] text-slate-400 border-t border-slate-200 pt-1 w-full flex justify-between">
-          <span>Venc: {{ instrumento.vencimentoCalibracao || '—' }}</span>
-          <span>Hidrogeron</span>
-        </div>
-      </div>
-      <div class="flex gap-2">
-        <button @click="imprimir" class="btn-tap flex-1 bg-slate-800 text-white py-2 rounded-lg font-bold text-xs">🖨️ Imprimir</button>
-        <button @click="$emit('fechar')" class="btn-tap flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg font-semibold text-xs">Fechar</button>
-      </div>
-    </div>
-  </div>`
-};
-
-/* ==========================================================================
-   COMPONENTE PRINCIPAL: CALIBRAÇÃO & MEDIÇÃO
-   ========================================================================== */
 const CalibracaoModule = {
   props: { user: Object },
   emits: ["go-home"],
-  components: { FichaInstrumentoModal, EtiquetaQRModal },
   setup(props) {
     const instrumentos = ref([]);
     const loading = ref(true);
     const erro = ref("");
+
+    // Filtros
     const busca = ref("");
     const filtroSetor = ref("todos");
     const filtroStatus = ref("todos");
-    const setoresDisponiveis = ref([]);
 
-    const modalFichaAberto = ref(false);
-    const modalQRAberto = ref(false);
+    // Modal
     const modalCadastroAberto = ref(false);
-    const instrumentoSelecionado = ref(null);
-    const salvando = ref(false);
-    const editando = ref(false);
+    const gravando = ref(false);
 
-    function getNomeOperadorAtivo() {
-      return (
-        props.user?.nome ||
-        props.user?.name ||
-        props.user?.email ||
-        window.userLogado?.nome ||
-        "EDUARDO"
-      ).toString().trim().toUpperCase();
-    }
-
-    const form = reactive({
-      id: "",
+    // Formulário de Cadastro / Edição
+    const formInstrumento = reactive({
       tag: "",
       instrumento: "",
       modelo: "",
@@ -273,48 +30,96 @@ const CalibracaoModule = {
       numeroSerie: "",
       certificadoRbc: "",
       laboratorio: "",
-      setor: "ELÉTRICA",
+      setor: "TESTE",
       operador: "",
       dataCalibracao: "",
       vencimentoCalibracao: "",
       dataChecagem: "",
       vencimentoChecagem: "",
-      status: "No Prazo",
-      observacoes: ""
+      status: "NO PRAZO",
+      observacoes: "",
+      // Anexo do Certificado / Laudo
+      anexoUrl: "",
+      anexoNome: "",
+      anexoBase64: ""
     });
 
-    async function carregar(force = false) {
+    function calcularStatus(dataVenc, statusManual) {
+      if (typeof window.statusInstrumentoCalibracao === "function") {
+        return window.statusInstrumentoCalibracao(dataVenc, statusManual);
+      }
+      const sm = String(statusManual || "").toLowerCase();
+      if (sm.includes("calibra")) return "Em Calibração";
+      if (!dataVenc) return "No Prazo";
+      const dv = new Date(dataVenc);
+      if (isNaN(dv.getTime())) return "No Prazo";
+      const hoje = new Date();
+      hoje.setHours(0, 0, 0, 0);
+      dv.setHours(0, 0, 0, 0);
+      const diff = Math.ceil((dv.getTime() - hoje.getTime()) / 86400000);
+      if (diff < 0) return "Vencido";
+      if (diff <= 45) return "Atenção (< 45d)";
+      return "No Prazo";
+    }
+
+    async function carregarDados(force = false) {
       loading.value = true;
       erro.value = "";
       try {
-        const rawData = await getInitialData(force);
-        const base = (rawData && rawData.data) ? rawData.data : rawData;
-        const listaBruta = base.calibracoes || base.Calibracoes || base.calibracoes_controle || base.Calibracoes_Controle || [];
-        
-        instrumentos.value = listaBruta.map(function(item) {
-          const norm = normalizeCalibracao(item);
-          norm.statusCalculado = statusInstrumentoCalibracao(norm.vencimentoCalibracao, norm.status);
-          return norm;
+        const raw = await getInitialData(force);
+        const base = (raw && raw.data) ? raw.data : (raw || {});
+
+        const lista = base.calibracoes || base.Calibracoes || base.Calibracoes_Controle || [];
+        instrumentos.value = (Array.isArray(lista) ? lista : []).map(item => {
+          const dtVenc = item.Vencimento_Calibracao || item.vencimentoCalibracao || item.Vencimento || item.vencimento || "";
+          const dtCal = item.Data_Calibracao || item.dataCalibracao || item.Data || item.data || "";
+          const statusCalculado = calcularStatus(dtVenc, item.Status || item.status);
+          const linkLaudo = item.Anexo_Laudo || item.anexoUrl || item.Certificado_Link || item.Link_Certificado || item.Link || "";
+
+          return {
+            ...item,
+            tag: item.TAG || item.tag || item.Codigo || item.ID || "",
+            instrumento: item.Descricao || item.Instrumento || item.instrumento || item.Nome || "",
+            modelo: item.Marca_Modelo || item.Modelo || item.modelo || "",
+            capacidade: item.Capacidade || item.capacidade || "",
+            criterio: item.Criterio_Aceitacao || item.criterioAceitacao || item.Criterio || "",
+            numeroSerie: item.Numero_Serie || item.numeroSerie || item.Serie || "",
+            certificadoRbc: item.Certificado_RBC || item.certificadoRbc || item.Certificado || "",
+            laboratorio: item.Laboratorio || item.laboratorio || item.Fornecedor || "",
+            setor: item.Setor || item.setor || item.Area || item.area || "Geral",
+            operador: item.Operador_Responsavel || item.operador || item.Responsavel || "",
+            dataCalibracao: dtCal ? String(dtCal).slice(0, 10) : "",
+            vencimento: dtVenc ? String(dtVenc).slice(0, 10) : "",
+            dataChecagem: item.Data_Checagem ? String(item.Data_Checagem).slice(0, 10) : (item.dataChecagem ? String(item.dataChecagem).slice(0, 10) : ""),
+            vencimentoChecagem: item.Vencimento_Checagem ? String(item.Vencimento_Checagem).slice(0, 10) : (item.vencimentoChecagem ? String(item.vencimentoChecagem).slice(0, 10) : ""),
+            observacoes: item.Observacoes || item.observacoes || "",
+            anexoUrl: linkLaudo,
+            statusCalculado
+          };
         });
 
-        const sSet = new Set();
-        instrumentos.value.forEach(i => { if (i.setor) sSet.add(i.setor); });
-        const setoresBase = base.setores || [];
-        if (Array.isArray(setoresBase)) {
-          setoresBase.forEach(s => sSet.add(String(s.Nome || s.nome || s).toUpperCase()));
-        }
-        setoresDisponiveis.value = Array.from(sSet).filter(Boolean);
-
-      } catch (e) {
-        console.error("Erro ao carregar calibração:", e);
+      } catch (err) {
+        console.warn("Aviso ao carregar calibração:", err);
         erro.value = "Não foi possível carregar os registros de Calibração & Medição.";
       } finally {
         loading.value = false;
       }
     }
 
+    const setoresDisponiveis = computed(() => {
+      const s = new Set();
+      instrumentos.value.forEach(i => {
+        if (i.setor) s.add(String(i.setor).trim());
+      });
+      return Array.from(s).sort();
+    });
+
     const contadores = computed(() => {
-      let noPrazo = 0, atencao = 0, vencidos = 0, emCalibracao = 0;
+      let noPrazo = 0;
+      let atencao = 0;
+      let vencidos = 0;
+      let emCalibracao = 0;
+
       instrumentos.value.forEach(i => {
         const st = i.statusCalculado;
         if (st === "No Prazo") noPrazo++;
@@ -322,294 +127,195 @@ const CalibracaoModule = {
         else if (st === "Vencido") vencidos++;
         else if (st === "Em Calibração") emCalibracao++;
       });
+
       return { noPrazo, atencao, vencidos, emCalibracao };
     });
 
     const instrumentosFiltrados = computed(() => {
+      let lista = instrumentos.value;
+
       const b = busca.value.trim().toLowerCase();
-      return instrumentos.value.filter(i => {
-        if (filtroSetor.value !== "todos" && i.setor !== filtroSetor.value) return false;
-        if (filtroStatus.value !== "todos" && i.statusCalculado !== filtroStatus.value) return false;
-        if (b) {
-          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.capacidade} ${i.certificadoRbc} ${i.laboratorio} ${i.setor} ${i.operador}`.toLowerCase();
-          if (!combo.includes(b)) return false;
-        }
-        return true;
-      });
+      if (b) {
+        lista = lista.filter(i => {
+          const combo = `${i.tag} ${i.instrumento} ${i.modelo} ${i.setor} ${i.operador} ${i.certificadoRbc}`.toLowerCase();
+          return combo.includes(b);
+        });
+      }
+
+      if (filtroSetor.value !== "todos") {
+        lista = lista.filter(i => i.setor === filtroSetor.value);
+      }
+
+      if (filtroStatus.value !== "todos") {
+        lista = lista.filter(i => i.statusCalculado === filtroStatus.value);
+      }
+
+      return lista;
     });
 
-    function abrirFicha(inst) {
-      instrumentoSelecionado.value = inst;
-      modalFichaAberto.value = true;
+    function manipularUploadArquivo(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      formInstrumento.anexoNome = file.name;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        formInstrumento.anexoBase64 = event.target.result;
+      };
+      reader.readAsDataURL(file);
     }
 
-    function abrirQR(inst) {
-      instrumentoSelecionado.value = inst;
-      modalQRAberto.value = true;
-    }
-
-    function abrirNovo() {
-      editando.value = false;
-      Object.assign(form, {
-        id: "",
-        tag: "",
-        instrumento: "",
-        modelo: "",
-        capacidade: "",
-        criterioAceitacao: "±6%",
-        numeroSerie: "",
-        certificadoRbc: "",
-        laboratorio: "",
-        setor: setoresDisponiveis.value[0] || "ELÉTRICA",
-        operador: getNomeOperadorAtivo(),
-        dataCalibracao: new Date().toISOString().slice(0, 10),
-        vencimentoCalibracao: "",
-        dataChecagem: "",
-        vencimentoChecagem: "",
-        status: "No Prazo",
-        observacoes: ""
-      });
-      modalCadastroAberto.value = true;
-    }
-
-    function abrirEditar(inst) {
-      editando.value = true;
-      Object.assign(form, {
-        id: inst.id || inst.tag,
-        tag: inst.tag,
-        instrumento: inst.instrumento,
-        modelo: inst.modelo,
-        capacidade: inst.capacidade,
-        criterioAceitacao: inst.criterioAceitacao,
-        numeroSerie: inst.numeroSerie,
-        certificadoRbc: inst.certificadoRbc,
-        laboratorio: inst.laboratorio,
-        setor: inst.setor,
-        operador: inst.operador || getNomeOperadorAtivo(),
-        dataCalibracao: inst.dataCalibracao ? String(inst.dataCalibracao).slice(0, 10) : "",
-        vencimentoCalibracao: inst.vencimentoCalibracao ? String(inst.vencimentoCalibracao).slice(0, 10) : "",
-        dataChecagem: inst.dataChecagem ? String(inst.dataChecagem).slice(0, 10) : "",
-        vencimentoChecagem: inst.vencimentoChecagem ? String(inst.vencimentoChecagem).slice(0, 10) : "",
-        status: inst.status,
-        observacoes: inst.observacoes
-      });
-      modalFichaAberto.value = false;
+    function abrirModalCadastro(inst = null) {
+      if (inst) {
+        formInstrumento.tag = inst.tag;
+        formInstrumento.instrumento = inst.instrumento;
+        formInstrumento.modelo = inst.modelo;
+        formInstrumento.capacidade = inst.capacidade;
+        formInstrumento.criterioAceitacao = inst.criterio;
+        formInstrumento.numeroSerie = inst.numeroSerie;
+        formInstrumento.certificadoRbc = inst.certificadoRbc;
+        formInstrumento.laboratorio = inst.laboratorio;
+        formInstrumento.setor = inst.setor;
+        formInstrumento.operador = inst.operador;
+        formInstrumento.dataCalibracao = inst.dataCalibracao;
+        formInstrumento.vencimentoCalibracao = inst.vencimento;
+        formInstrumento.dataChecagem = inst.dataChecagem;
+        formInstrumento.vencimentoChecagem = inst.vencimentoChecagem;
+        formInstrumento.status = inst.statusCalculado || "NO PRAZO";
+        formInstrumento.observacoes = inst.observacoes;
+        formInstrumento.anexoUrl = inst.anexoUrl || "";
+        formInstrumento.anexoNome = inst.anexoUrl ? "Certificado Vinculado" : "";
+        formInstrumento.anexoBase64 = "";
+      } else {
+        Object.keys(formInstrumento).forEach(k => formInstrumento[k] = "");
+        formInstrumento.setor = "TESTE";
+        formInstrumento.status = "NO PRAZO";
+      }
       modalCadastroAberto.value = true;
     }
 
     async function salvarInstrumento() {
-      if (!form.instrumento.trim()) return pushToast("Informe o nome do instrumento.", "error");
-      if (!form.tag.trim()) return pushToast("Informe a TAG do instrumento.", "error");
+      if (!formInstrumento.tag || !formInstrumento.instrumento) {
+        pushToast("Preencha a TAG e o Nome do Instrumento.", "error");
+        return;
+      }
 
-      salvando.value = true;
+      gravando.value = true;
       try {
         const payload = {
           action: "saveCadastro",
           tipo: "calibracao_instrumento",
-          tag: form.tag.trim().toUpperCase(),
-          TAG: form.tag.trim().toUpperCase(),
-          id: form.tag.trim().toUpperCase(),
-          instrumento: form.instrumento.trim().toUpperCase(),
-          Instrumento: form.instrumento.trim().toUpperCase(),
-          modelo: form.modelo.trim().toUpperCase(),
-          Marca_Modelo: form.modelo.trim().toUpperCase(),
-          capacidade: form.capacidade.trim().toUpperCase(),
-          Capacidade: form.capacidade.trim().toUpperCase(),
-          criterioAceitacao: form.criterioAceitacao.trim().toUpperCase(),
-          Criterio_Aceitacao: form.criterioAceitacao.trim().toUpperCase(),
-          numeroSerie: form.numeroSerie.trim().toUpperCase(),
-          Numero_Serie: form.numeroSerie.trim().toUpperCase(),
-          certificadoRbc: form.certificadoRbc.trim().toUpperCase(),
-          Certificado_RBC: form.certificadoRbc.trim().toUpperCase(),
-          laboratorio: form.laboratorio.trim().toUpperCase(),
-          Laboratorio: form.laboratorio.trim().toUpperCase(),
-          setor: form.setor.trim().toUpperCase(),
-          Setor: form.setor.trim().toUpperCase(),
-          operador: form.operador.trim().toUpperCase(),
-          Operador_Responsavel: form.operador.trim().toUpperCase(),
-          responsavel: form.operador.trim().toUpperCase(),
-          dataCalibracao: form.dataCalibracao,
-          Data_Calibracao: form.dataCalibracao,
-          vencimentoCalibracao: form.vencimentoCalibracao,
-          Vencimento_Calibracao: form.vencimentoCalibracao,
-          dataChecagem: form.dataChecagem,
-          Data_Checagem: form.dataChecagem,
-          vencimentoChecagem: form.vencimentoChecagem,
-          Vencimento_Checagem: form.vencimentoChecagem,
-          status: form.status.trim().toUpperCase(),
-          Status: form.status.trim().toUpperCase(),
-          observacoes: form.observacoes.trim().toUpperCase(),
-          Observacoes: form.observacoes.trim().toUpperCase(),
-          empresaId: "HIDROGERON"
+          tag: formInstrumento.tag.trim().toUpperCase(),
+          instrumento: formInstrumento.instrumento.trim().toUpperCase(),
+          modelo: formInstrumento.modelo.trim().toUpperCase(),
+          capacidade: formInstrumento.capacidade.trim().toUpperCase(),
+          criterioAceitacao: formInstrumento.criterioAceitacao.trim().toUpperCase(),
+          numeroSerie: formInstrumento.numeroSerie.trim().toUpperCase(),
+          certificadoRbc: formInstrumento.certificadoRbc.trim().toUpperCase(),
+          laboratorio: formInstrumento.laboratorio.trim().toUpperCase(),
+          setor: formInstrumento.setor.trim().toUpperCase(),
+          operador: formInstrumento.operador.trim().toUpperCase(),
+          dataCalibracao: formInstrumento.dataCalibracao,
+          vencimentoCalibracao: formInstrumento.vencimentoCalibracao,
+          dataChecagem: formInstrumento.dataChecagem,
+          vencimentoChecagem: formInstrumento.vencimentoChecagem,
+          status: formInstrumento.status,
+          observacoes: formInstrumento.observacoes.trim().toUpperCase(),
+          anexoUrl: formInstrumento.anexoUrl,
+          anexoNome: formInstrumento.anexoNome,
+          anexoBase64: formInstrumento.anexoBase64
         };
 
-        const res = await postToAppsScript(payload);
-        console.log("Resposta da gravação:", res);
-
-        // Atualização reativa imediata local em CAIXA ALTA
-        const tagAlvo = form.tag.trim().toUpperCase();
-        const indexExistente = instrumentos.value.findIndex(i => String(i.tag || i.id).toUpperCase() === tagAlvo);
-        
-        const itemAtualizado = {
-          id: tagAlvo,
-          tag: tagAlvo,
-          instrumento: form.instrumento.trim().toUpperCase(),
-          modelo: form.modelo.trim().toUpperCase(),
-          capacidade: form.capacidade.trim().toUpperCase(),
-          criterioAceitacao: form.criterioAceitacao.trim().toUpperCase(),
-          numeroSerie: form.numeroSerie.trim().toUpperCase(),
-          certificadoRbc: form.certificadoRbc.trim().toUpperCase(),
-          laboratorio: form.laboratorio.trim().toUpperCase(),
-          setor: form.setor.trim().toUpperCase(),
-          operador: form.operador.trim().toUpperCase(),
-          dataCalibracao: form.dataCalibracao,
-          vencimentoCalibracao: form.vencimentoCalibracao,
-          dataChecagem: form.dataChecagem,
-          vencimentoChecagem: form.vencimentoChecagem,
-          status: form.status.trim().toUpperCase(),
-          observacoes: form.observacoes.trim().toUpperCase(),
-          statusCalculado: statusInstrumentoCalibracao(form.vencimentoCalibracao, form.status)
-        };
-
-        if (indexExistente !== -1) {
-          instrumentos.value[indexExistente] = itemAtualizado;
-        } else {
-          instrumentos.value.unshift(itemAtualizado);
-        }
-
+        await postToAppsScript(payload);
         pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
-        
-      } catch (e) {
-        console.error("Erro ao salvar:", e);
+        await carregarDados(true);
+      } catch (err) {
+        console.error("Erro ao salvar:", err);
         pushToast("Erro ao gravar instrumento.", "error");
       } finally {
-        salvando.value = false;
+        gravando.value = false;
       }
     }
 
-    async function registrarChecagem180d(inst) {
-      const resp = confirm(`Registrar checagem de 180 dias para o instrumento ${inst.tag}?`);
-      if (!resp) return;
-      
-      const hoje = new Date().toISOString().slice(0, 10);
-      const novoVenc = calcularVencimentoChecagem(hoje, "Semestral");
-
-      try {
-        await postToAppsScript({
-          action: "saveCadastro",
-          tipo: "checagem_180d",
-          id: inst.tag,
-          tag: inst.tag,
-          TAG: inst.tag,
-          dataChecagem: hoje,
-          Data_Checagem: hoje,
-          vencimentoChecagem: novoVenc,
-          Vencimento_Checagem: novoVenc,
-          usuario: getNomeOperadorAtivo(),
-          empresaId: "HIDROGERON"
-        });
-
-        inst.dataChecagem = hoje;
-        inst.vencimentoChecagem = novoVenc;
-        pushToast(`Checagem do instrumento ${inst.tag} registrada!`, "success");
-        modalFichaAberto.value = false;
-      } catch (e) {
-        console.error(e);
-        pushToast("Erro ao registrar checagem.", "error");
-      }
-    }
-
-    function formatarData(dt) {
-      if (!dt) return "—";
-      var d = new Date(dt);
-      return isNaN(d.getTime()) ? dt : d.toLocaleDateString("pt-BR");
-    }
-
-    function badgeStatusClasse(st) {
-      var s = String(st || "").toLowerCase();
-      if (s.indexOf("prazo") !== -1) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-      if (s.indexOf("aten") !== -1) return "bg-amber-50 text-amber-700 border-amber-200";
-      if (s.indexOf("venc") !== -1) return "bg-rose-50 text-rose-700 border-rose-200";
-      return "bg-sky-50 text-sky-700 border-sky-200";
-    }
-
-    onMounted(carregar);
+    onMounted(carregarDados);
 
     return {
-      instrumentos, loading, erro, busca, filtroSetor, filtroStatus, setoresDisponiveis,
-      contadores, instrumentosFiltrados, modalFichaAberto, modalQRAberto, modalCadastroAberto,
-      instrumentoSelecionado, salvando, editando, form,
-      abrirFicha, abrirQR, abrirNovo, abrirEditar, salvarInstrumento, registrarChecagem180d,
-      formatarData, badgeStatusClasse
+      instrumentos, loading, erro, busca, filtroSetor, filtroStatus,
+      setoresDisponiveis, contadores, instrumentosFiltrados,
+      modalCadastroAberto, formInstrumento, gravando,
+      abrirModalCadastro, salvarInstrumento, manipularUploadArquivo, carregarDados
     };
   },
   template: `
-  <div class="space-y-5">
-    <!-- Contadores Cards -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-emerald-500"></span>
-        <div>
-          <p class="text-xl font-extrabold text-slate-800">{{ contadores.noPrazo }}</p>
-          <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">No Prazo (> 45d)</p>
+  <div class="space-y-4">
+    <!-- CARDS DE STATUS -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide">No Prazo (> 45d)</span>
         </div>
+        <p class="text-2xl font-black text-slate-800">{{ contadores.noPrazo }}</p>
       </div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-amber-400"></span>
-        <div>
-          <p class="text-xl font-extrabold text-slate-800">{{ contadores.atencao }}</p>
-          <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Atenção (≤ 45d)</p>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide">Atenção (≤ 45d)</span>
         </div>
+        <p class="text-2xl font-black text-amber-600">{{ contadores.atencao }}</p>
       </div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-rose-500"></span>
-        <div>
-          <p class="text-xl font-extrabold text-slate-800">{{ contadores.vencidos }}</p>
-          <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Vencidos</p>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide">Vencidos</span>
         </div>
+        <p class="text-2xl font-black text-rose-600">{{ contadores.vencidos }}</p>
       </div>
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-        <span class="w-3.5 h-3.5 rounded-full bg-sky-500"></span>
-        <div>
-          <p class="text-xl font-extrabold text-slate-800">{{ contadores.emCalibracao }}</p>
-          <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Em Calibração</p>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide">Em Calibração</span>
         </div>
+        <p class="text-2xl font-black text-sky-600">{{ contadores.emCalibracao }}</p>
       </div>
     </div>
 
-    <!-- Barra de Filtros e Busca -->
+    <!-- BARRA DE BUSCA, FILTROS E AÇÃO -->
     <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex flex-col sm:flex-row gap-2 items-center justify-between">
       <div class="flex-1 w-full sm:w-auto">
         <input v-model="busca" type="text" placeholder="Buscar por TAG, instrumento, modelo, setor ou operador..."
           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:ring-2 focus:ring-sky-500 focus:outline-none" />
       </div>
-      <div class="flex gap-2 w-full sm:w-auto">
-        <select v-model="filtroSetor" class="rounded-lg border border-slate-300 px-2 py-2 text-xs bg-white">
+
+      <div class="flex flex-wrap gap-2 w-full sm:w-auto items-center">
+        <select v-model="filtroSetor" class="rounded-lg border border-slate-300 px-2.5 py-2 text-xs bg-white">
           <option value="todos">Setor: Todos</option>
           <option v-for="s in setoresDisponiveis" :key="s" :value="s">{{ s }}</option>
         </select>
-        <select v-model="filtroStatus" class="rounded-lg border border-slate-300 px-2 py-2 text-xs bg-white">
+
+        <select v-model="filtroStatus" class="rounded-lg border border-slate-300 px-2.5 py-2 text-xs bg-white">
           <option value="todos">Status: Todos</option>
           <option value="No Prazo">No Prazo</option>
           <option value="Atenção (< 45d)">Atenção (≤ 45d)</option>
           <option value="Vencido">Vencido</option>
           <option value="Em Calibração">Em Calibração</option>
         </select>
-        <button @click="abrirNovo" class="btn-tap bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs px-3.5 py-2 rounded-lg whitespace-nowrap shadow-sm">
+
+        <button @click="abrirModalCadastro()" class="btn-tap px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm">
           + Novo Cadastro
         </button>
       </div>
     </div>
 
-    <div v-if="erro" class="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-xs font-semibold">
-      {{ erro }}
-    </div>
-
     <div v-if="loading" class="flex justify-center py-12"><span class="spinner"></span></div>
+    <div v-if="erro" class="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-xs font-semibold">{{ erro }}</div>
 
-    <!-- Tabela de Instrumentos Fiel à Planilha -->
-    <div v-else class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+    <!-- TABELA DE INSTRUMENTOS -->
+    <div v-if="!loading" class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
       <div class="overflow-x-auto">
         <table class="w-full text-xs text-left">
           <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 text-[10px] uppercase font-bold tracking-wide">
@@ -621,175 +327,184 @@ const CalibracaoModule = {
               <th class="p-3">Operador</th>
               <th class="p-3">Data Calibração</th>
               <th class="p-3">Vencimento</th>
-              <th class="p-3">Status</th>
-              <th class="p-3 text-center w-28">Ações</th>
+              <th class="p-3 text-center">Laudo</th>
+              <th class="p-3 text-center">Status</th>
+              <th class="p-3 text-center w-20">Ações</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <tr v-for="inst in instrumentosFiltrados" :key="inst.id || inst.tag" class="hover:bg-slate-50/80 transition-colors">
+            <tr v-for="inst in instrumentosFiltrados" :key="inst.tag" class="hover:bg-slate-50/80">
+              <td class="p-3 font-mono font-bold text-sky-900 bg-sky-50/50">{{ inst.tag }}</td>
               <td class="p-3">
-                <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded">{{ inst.tag }}</span>
+                <p class="font-bold text-slate-800">{{ inst.instrumento }}</p>
+                <p class="text-[10px] text-slate-400">{{ inst.modelo || 'Padrão' }} • RBC: {{ inst.certificadoRbc || 'S/N' }}</p>
               </td>
               <td class="p-3">
-                <p class="font-bold text-slate-800 text-xs">{{ inst.instrumento }}</p>
-                <p class="text-[10px] text-slate-400 mt-0.5">
-                  {{ inst.modelo || 'Sem modelo' }} <span v-if="inst.certificadoRbc">· RBC: {{ inst.certificadoRbc }}</span>
-                </p>
-              </td>
-              <td class="p-3">
-                <p class="text-slate-700 font-medium">{{ inst.capacidade || '—' }}</p>
-                <p class="text-[10px] text-slate-400">{{ inst.criterioAceitacao || '—' }}</p>
+                <p class="text-slate-700">{{ inst.capacidade || '—' }}</p>
+                <p class="text-[10px] text-slate-400">Critério: {{ inst.criterio || '—' }}</p>
               </td>
               <td class="p-3 text-slate-600 font-medium">{{ inst.setor }}</td>
-              <td class="p-3 text-slate-700 font-semibold">{{ inst.operador || '—' }}</td>
-              <td class="p-3 text-slate-500">{{ formatarData(inst.dataCalibracao) }}</td>
-              <td class="p-3 font-semibold text-slate-700">{{ formatarData(inst.vencimentoCalibracao) }}</td>
-              <td class="p-3">
-                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap inline-block" :class="badgeStatusClasse(inst.statusCalculado)">
+              <td class="p-3 text-slate-600">{{ inst.operador || '—' }}</td>
+              <td class="p-3 font-mono text-slate-600">{{ inst.dataCalibracao || '—' }}</td>
+              <td class="p-3 font-mono font-bold" :class="inst.statusCalculado === 'Vencido' ? 'text-rose-600' : 'text-slate-800'">
+                {{ inst.vencimento || '—' }}
+              </td>
+              <td class="p-3 text-center">
+                <a v-if="inst.anexoUrl" :href="inst.anexoUrl" target="_blank" class="px-2 py-1 rounded bg-sky-50 text-sky-700 hover:bg-sky-100 font-bold text-[10px] inline-flex items-center gap-1 border border-sky-200">
+                  📄 Ver
+                </a>
+                <span v-else class="text-slate-300 text-[10px]">Sem anexo</span>
+              </td>
+              <td class="p-3 text-center">
+                <span v-if="inst.statusCalculado === 'No Prazo'" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  No Prazo
+                </span>
+                <span v-else-if="inst.statusCalculado === 'Atenção (< 45d)'" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                  Atenção
+                </span>
+                <span v-else-if="inst.statusCalculado === 'Vencido'" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 animate-pulse">
+                  Vencido
+                </span>
+                <span v-else class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200">
                   {{ inst.statusCalculado }}
                 </span>
               </td>
               <td class="p-3 text-center">
-                <div class="flex items-center justify-center gap-1.5">
-                  <button @click="abrirFicha(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors" title="Visualizar Ficha Técnica / Laudo">
-                    👁️
-                  </button>
-                  <button @click="abrirQR(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Gerar Etiqueta com QR Code">
-                    🏷️
-                  </button>
-                  <button @click="abrirEditar(inst)" class="btn-tap p-1.5 text-slate-600 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Editar Instrumento">
-                    ✏️
-                  </button>
-                </div>
+                <button @click="abrirModalCadastro(inst)" class="text-sky-600 hover:text-sky-800 font-bold text-[11px]">
+                  Editar
+                </button>
               </td>
             </tr>
             <tr v-if="instrumentosFiltrados.length === 0">
-              <td colspan="9" class="p-8 text-center text-slate-400 font-medium">
-                Nenhum instrumento de medição encontrado com os filtros atuais.
-              </td>
+              <td colspan="10" class="p-8 text-center text-slate-400">Nenhum instrumento de medição encontrado com os filtros atuais.</td>
             </tr>
           </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Modais Integrados -->
-    <ficha-instrumento-modal v-if="modalFichaAberto" :instrumento="instrumentoSelecionado"
-      @fechar="modalFichaAberto = false"
-      @editar="abrirEditar(instrumentoSelecionado)"
-      @gerar-qr="abrirQR(instrumentoSelecionado)"
-      @registrar-checagem="registrarChecagem180d(instrumentoSelecionado)"
-      @ver-laudo="abrirFicha(instrumentoSelecionado)">
-    </ficha-instrumento-modal>
-
-    <etiqueta-q-r-modal v-if="modalQRAberto" :instrumento="instrumentoSelecionado" @fechar="modalQRAberto = false"></etiqueta-q-r-modal>
-
-    <!-- Modal Cadastro & Edição -->
-    <div v-if="modalCadastroAberto" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-      <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+    <!-- MODAL CADASTRO / EDIÇÃO COM ANEXO DE CERTIFICADO -->
+    <div v-if="modalCadastroAberto" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" @click.self="modalCadastroAberto = false">
+      <div class="bg-white w-full max-w-xl rounded-2xl shadow-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto text-xs">
         <div class="flex items-center justify-between border-b pb-3">
-          <h3 class="font-bold text-slate-800 text-sm">{{ editando ? 'Editar Instrumento' : 'Novo Instrumento de Medição' }}</h3>
-          <button @click="modalCadastroAberto = false" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-1">✕</button>
+          <div>
+            <h3 class="font-extrabold text-slate-800 text-sm">
+              {{ formInstrumento.tag ? 'Editar Instrumento' : 'Novo Instrumento de Medição' }}
+            </h3>
+            <p class="text-[11px] text-slate-400 mt-0.5">Controle Metrológico e Monitoramento</p>
+          </div>
+          <button @click="modalCadastroAberto = false" class="text-slate-400 hover:text-slate-600 text-lg font-bold">✕</button>
         </div>
 
-        <div class="space-y-3 text-xs">
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">TAG / Código *</label>
-              <input v-model="form.tag" type="text" placeholder="Ex: CAL-001" class="w-full border border-slate-300 rounded-lg p-2 font-mono uppercase" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Instrumento *</label>
-              <input v-model="form.instrumento" type="text" placeholder="Ex: ALICATE AMPERÍMETRO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Marca / Modelo</label>
-              <input v-model="form.modelo" type="text" placeholder="Ex: MINIPA/ET-3810C" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Capacidade</label>
-              <input v-model="form.capacidade" type="text" placeholder="Ex: 1.000 V / 1.000 A" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Critério de Aceitação</label>
-              <input v-model="form.criterioAceitacao" type="text" placeholder="Ex: ±6%" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Número de Série</label>
-              <input v-model="form.numeroSerie" type="text" placeholder="Ex: 4638894" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Certificado RBC</label>
-              <input v-model="form.certificadoRbc" type="text" placeholder="Ex: 0305A25" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Laboratório / Fornecedor</label>
-              <input v-model="form.laboratorio" type="text" placeholder="Ex: RBC / MSMI - MEDICAO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Setor</label>
-              <select v-model="form.setor" class="w-full border border-slate-300 rounded-lg p-2 bg-white uppercase">
-                <option v-for="s in setoresDisponiveis" :key="s" :value="s">{{ s }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Operador Responsável</label>
-              <input v-model="form.operador" type="text" placeholder="Ex: CARLOS / EDUARDO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
-            </div>
-          </div>
-
-          <div class="grid grid-cols-3 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Data Calibração</label>
-              <input v-model="form.dataCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Vencimento Calibração</label>
-              <input v-model="form.vencimentoCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Status</label>
-              <select v-model="form.status" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
-                <option value="No Prazo">No Prazo</option>
-                <option value="Em Calibração">Em Calibração</option>
-                <option value="Vencido">Vencido</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Data da Checagem</label>
-              <input v-model="form.dataChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-600 mb-1">Vencimento da Checagem</label>
-              <input v-model="form.vencimentoChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2 bg-white" />
-            </div>
-          </div>
-
+        <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block font-semibold text-slate-600 mb-1">Observações</label>
-            <textarea v-model="form.observacoes" rows="2" class="w-full border border-slate-300 rounded-lg p-2 uppercase"></textarea>
+            <label class="block font-semibold text-slate-600 mb-1">TAG / Código *</label>
+            <input v-model="formInstrumento.tag" type="text" placeholder="Ex: CAL-031" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
           </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Instrumento *</label>
+            <input v-model="formInstrumento.instrumento" type="text" placeholder="Ex: TERMÔMETRO DIGITAL" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Marca / Modelo</label>
+            <input v-model="formInstrumento.modelo" type="text" placeholder="Ex: MINIPA MT-320B" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Capacidade</label>
+            <input v-model="formInstrumento.capacidade" type="text" placeholder="Ex: 600°C" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Critério de Aceitação</label>
+            <input v-model="formInstrumento.criterioAceitacao" type="text" placeholder="Ex: ±6%" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Número de Série</label>
+            <input v-model="formInstrumento.numeroSerie" type="text" placeholder="Ex: 1858956" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Certificado RBC</label>
+            <input v-model="formInstrumento.certificadoRbc" type="text" placeholder="Ex: 2627/26" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Laboratório / Fornecedor</label>
+            <input v-model="formInstrumento.laboratorio" type="text" placeholder="Ex: RBC / MSMI - MEDICAO" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Setor</label>
+            <select v-model="formInstrumento.setor" class="w-full border border-slate-300 rounded-lg p-2 bg-white uppercase">
+              <option value="TESTE">TESTE</option>
+              <option value="OFICINA">OFICINA</option>
+              <option value="PREPARAÇÃO">PREPARAÇÃO</option>
+              <option value="COATING">COATING</option>
+              <option value="METALMECÂNICA">METALMECÂNICA</option>
+              <option value="HIDRÁULICA">HIDRÁULICA</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Operador Responsável</label>
+            <input v-model="formInstrumento.operador" type="text" placeholder="Ex: CARLOS" class="w-full border border-slate-300 rounded-lg p-2 uppercase" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Data Calibração</label>
+            <input v-model="formInstrumento.dataCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Vencimento Calibração</label>
+            <input v-model="formInstrumento.vencimentoCalibracao" type="date" class="w-full border border-slate-300 rounded-lg p-2 font-bold" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Data da Checagem</label>
+            <input v-model="formInstrumento.dataChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2" />
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">Vencimento da Checagem</label>
+            <input v-model="formInstrumento.vencimentoChecagem" type="date" class="w-full border border-slate-300 rounded-lg p-2" />
+          </div>
+        </div>
+
+        <!-- SEÇÃO DE ANEXO DO CERTIFICADO / LAUDO DE CALIBRAÇÃO -->
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="block font-bold text-slate-700 uppercase text-[10px] tracking-wide">
+              📎 Certificado / Laudo de Calibração (RBC)
+            </label>
+            <span v-if="formInstrumento.anexoUrl" class="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
+              Certificado Vinculado
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-1 font-semibold">Subir Arquivo (PDF ou Imagem):</label>
+              <input type="file" @change="manipularUploadArquivo" accept=".pdf,image/*" 
+                class="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-bold file:bg-sky-600 file:text-white hover:file:bg-sky-700 cursor-pointer" />
+              <p v-if="formInstrumento.anexoNome" class="text-[10px] text-sky-800 font-semibold mt-1">
+                Arquivo: {{ formInstrumento.anexoNome }}
+              </p>
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-1 font-semibold">Ou Link Direto (Google Drive / URL):</label>
+              <input v-model="formInstrumento.anexoUrl" type="url" placeholder="https://..." 
+                class="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs" />
+            </div>
+          </div>
+
+          <div v-if="formInstrumento.anexoUrl" class="pt-1">
+            <a :href="formInstrumento.anexoUrl" target="_blank" class="text-xs text-sky-700 hover:text-sky-900 font-bold underline inline-flex items-center gap-1">
+              ↗ Visualizar Certificado em Nova Aba
+            </a>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-600 mb-1">Observações</label>
+          <textarea v-model="formInstrumento.observacoes" rows="2" placeholder="Observações do instrumento..." class="w-full border border-slate-300 rounded-lg p-2 uppercase"></textarea>
         </div>
 
         <div class="flex justify-end gap-2 border-t pt-3">
-          <button @click="modalCadastroAberto = false" class="btn-tap px-3.5 py-2 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold">Cancelar</button>
-          <button @click="salvarInstrumento" :disabled="salvando" class="btn-tap px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-md">
-            {{ salvando ? 'Gravando...' : 'Gravar Instrumento' }}
+          <button @click="modalCadastroAberto = false" class="btn-tap px-4 py-2 rounded-lg bg-slate-100 text-slate-600 font-semibold">Cancelar</button>
+          <button @click="salvarInstrumento" :disabled="gravando" class="btn-tap px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold shadow-md">
+            {{ gravando ? 'Gravando...' : 'Gravar Instrumento' }}
           </button>
         </div>
       </div>

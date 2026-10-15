@@ -2,7 +2,7 @@
    js/api.js — Camada de Comunicação com Google Apps Script
    ========================================================================== */
 
-const API_URL = "https://script.google.com/macros/s/AKfycbylV6goN4fe0ARJkeqHHaLUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-1Y/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycby1V6goN4fe0ARJKeqHhAlUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-iY/exec";
 
 // Helpers globais para pendencias.js e outros módulos
 window.extractCorretivas = function(data) {
