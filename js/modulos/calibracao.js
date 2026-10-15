@@ -156,11 +156,6 @@ const CalibracaoModule = {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
 
-      if (file.size > 15 * 1024 * 1024) {
-        pushToast("O arquivo é maior que 15MB. Utilize o link direto do Google Drive.", "error");
-        return;
-      }
-
       formInstrumento.anexoNome = file.name;
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -225,14 +220,29 @@ const CalibracaoModule = {
           vencimentoChecagem: formInstrumento.vencimentoChecagem,
           status: formInstrumento.status,
           observacoes: formInstrumento.observacoes.trim().toUpperCase(),
-          anexoUrl: formInstrumento.anexoUrl,
-          anexoNome: formInstrumento.anexoNome,
-          anexoBase64: formInstrumento.anexoBase64
+          anexoUrl: formInstrumento.anexoUrl.trim(),
+          anexoNome: formInstrumento.anexoNome
         };
 
-        const resp = await postToAppsScript(payload);
+        // Se houver arquivo Base64 pequeno, inclui; se não, envia apenas o link e metadados
+        if (formInstrumento.anexoBase64 && formInstrumento.anexoBase64.length < 500000) {
+          payload.anexoBase64 = formInstrumento.anexoBase64;
+        }
 
-        // Atualização reativa imediata na tabela
+        let resp = null;
+        try {
+          resp = await postToAppsScript(payload);
+        } catch (postErr) {
+          // Se falhou por tamanho do payload com arquivo, tenta enviar de imediato sem o base64
+          if (payload.anexoBase64) {
+            delete payload.anexoBase64;
+            resp = await postToAppsScript(payload);
+          } else {
+            throw postErr;
+          }
+        }
+
+        // Atualização da tabela local
         const idx = instrumentos.value.findIndex(i => i.tag.toUpperCase() === payload.tag);
         const itemAtualizado = {
           tag: payload.tag,
@@ -250,7 +260,7 @@ const CalibracaoModule = {
           dataChecagem: payload.dataChecagem,
           vencimentoChecagem: payload.vencimentoChecagem,
           observacoes: payload.observacoes,
-          anexoUrl: resp.linkCertificado || payload.anexoUrl,
+          anexoUrl: (resp && resp.linkCertificado) ? resp.linkCertificado : payload.anexoUrl,
           statusCalculado: calcularStatus(payload.vencimentoCalibracao, payload.status)
         };
 
@@ -263,11 +273,12 @@ const CalibracaoModule = {
         pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
 
-        // Recarrega em segundo plano
-        carregarDados(true);
+        // Atualiza base completa em segundo plano
+        setTimeout(() => carregarDados(true), 800);
+
       } catch (err) {
         console.error("Erro ao salvar:", err);
-        pushToast("Erro ao gravar instrumento. Tente utilizar o link do Drive se o arquivo for muito grande.", "error");
+        pushToast("Erro ao gravar instrumento. Verifique a conexão com o servidor.", "error");
       } finally {
         gravando.value = false;
       }
