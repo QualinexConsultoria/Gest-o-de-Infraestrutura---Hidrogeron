@@ -1,11 +1,12 @@
 /* ==========================================================================
    js/api.js — Camada de Comunicação com Google Apps Script
-   Suporte a Cache, Retentativas e Tratamento Robusto de POST
+   Sincronização de Dados, Resiliência e Cache
    ========================================================================== */
 
-const API_URL = "https://script.google.com/macros/s/AKfycbylV6goN4fe0ARJkeqHHaLUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-1Y/exec";
+// COLE A SUA URL ATIVA GERADA DO APPS SCRIPT ENTRE AS ASPAS ABAIXO:
+const API_URL = "https://script.google.com/macros/s/AKfycby1V6goN4fe0ARJKeqHhAlUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-iY/exec";
 
-// Helpers globais
+// Helpers globais para pendencias.js e outros módulos
 window.extractCorretivas = function(data) {
   if (!data) return [];
   return data.chamados || data.Chamados_Corretiva || data.corretivas || [];
@@ -45,7 +46,7 @@ window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
   return "No Prazo";
 };
 
-// Funções de Requisição
+// Requisições HTTP
 async function apiGet(params = {}) {
   const query = new URLSearchParams(params).toString();
   const url = query ? `${API_URL}?${query}` : API_URL;
@@ -75,8 +76,7 @@ async function getInitialData(force = false) {
       try {
         const parsed = JSON.parse(salvo);
         window.lastLoadedData = parsed;
-        
-        // Atualiza em background
+
         apiGet({ _t: Date.now() }).then(dadosNovos => {
           localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dadosNovos));
           window.lastLoadedData = dadosNovos;
