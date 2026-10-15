@@ -156,6 +156,11 @@ const CalibracaoModule = {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
 
+      if (file.size > 15 * 1024 * 1024) {
+        pushToast("O arquivo é maior que 15MB. Utilize o link direto do Google Drive.", "error");
+        return;
+      }
+
       formInstrumento.anexoNome = file.name;
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -225,13 +230,44 @@ const CalibracaoModule = {
           anexoBase64: formInstrumento.anexoBase64
         };
 
-        await postToAppsScript(payload);
+        const resp = await postToAppsScript(payload);
+
+        // Atualização reativa imediata na tabela
+        const idx = instrumentos.value.findIndex(i => i.tag.toUpperCase() === payload.tag);
+        const itemAtualizado = {
+          tag: payload.tag,
+          instrumento: payload.instrumento,
+          modelo: payload.modelo,
+          capacidade: payload.capacidade,
+          criterio: payload.criterioAceitacao,
+          numeroSerie: payload.numeroSerie,
+          certificadoRbc: payload.certificadoRbc,
+          laboratorio: payload.laboratorio,
+          setor: payload.setor,
+          operador: payload.operador,
+          dataCalibracao: payload.dataCalibracao,
+          vencimento: payload.vencimentoCalibracao,
+          dataChecagem: payload.dataChecagem,
+          vencimentoChecagem: payload.vencimentoChecagem,
+          observacoes: payload.observacoes,
+          anexoUrl: resp.linkCertificado || payload.anexoUrl,
+          statusCalculado: calcularStatus(payload.vencimentoCalibracao, payload.status)
+        };
+
+        if (idx !== -1) {
+          instrumentos.value[idx] = { ...instrumentos.value[idx], ...itemAtualizado };
+        } else {
+          instrumentos.value.unshift(itemAtualizado);
+        }
+
         pushToast("Instrumento gravado com sucesso!", "success");
         modalCadastroAberto.value = false;
-        await carregarDados(true);
+
+        // Recarrega em segundo plano
+        carregarDados(true);
       } catch (err) {
         console.error("Erro ao salvar:", err);
-        pushToast("Erro ao gravar instrumento.", "error");
+        pushToast("Erro ao gravar instrumento. Tente utilizar o link do Drive se o arquivo for muito grande.", "error");
       } finally {
         gravando.value = false;
       }

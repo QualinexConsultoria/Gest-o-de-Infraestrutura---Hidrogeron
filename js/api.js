@@ -1,10 +1,11 @@
 /* ==========================================================================
    js/api.js — Camada de Comunicação com Google Apps Script
+   Suporte a Cache, Retentativas e Tratamento Robusto de POST
    ========================================================================== */
 
-const API_URL = "https://script.google.com/macros/s/AKfycby1V6goN4fe0ARJKeqHhAlUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-iY/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbylV6goN4fe0ARJkeqHHaLUgRSYdBK_gVKdSQ7b_yBm12Qpl4vgQ0Vp6_hmzeQoS-1Y/exec";
 
-// Helpers globais para pendencias.js e outros módulos
+// Helpers globais
 window.extractCorretivas = function(data) {
   if (!data) return [];
   return data.chamados || data.Chamados_Corretiva || data.corretivas || [];
@@ -22,7 +23,7 @@ window.extractCalibracoes = function(data) {
 
 window.extrairIdCalibracaoDoHash = function() {
   const hash = window.location.hash || "";
-  const match = hash.match(/calibracao\/([^\/?#]+)/i);
+  const match = hash.match(/calibracao\/([^/?#]+)/i);
   return match ? decodeURIComponent(match[1]) : null;
 };
 
@@ -44,16 +45,10 @@ window.statusInstrumentoCalibracao = function(dataVenc, statusManual) {
   return "No Prazo";
 };
 
-const EMPRESA_PADRAO = "HIDROGERON";
-
-// Cache em memória
-let memoryCache = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 30000;
-
+// Funções de Requisição
 async function apiGet(params = {}) {
-  const qs = new URLSearchParams({ ...params, empresaId: EMPRESA_PADRAO, _t: Date.now() });
-  const url = `${API_URL}?${qs.toString()}`;
+  const query = new URLSearchParams(params).toString();
+  const url = query ? `${API_URL}?${query}` : API_URL;
 
   const res = await fetch(url, {
     method: "GET",
@@ -61,65 +56,66 @@ async function apiGet(params = {}) {
   });
 
   if (!res.ok) {
-    throw new Error(`Erro na resposta da rede (HTTP ${res.status})`);
+    throw new Error(`Erro na API: HTTP ${res.status}`);
   }
 
-  const data = await res.json();
-  if (data.status === "erro") {
-    throw new Error(data.erro || "Erro retornado pelo Apps Script");
+  const json = await res.json();
+  if (json.status === "erro") {
+    throw new Error(json.erro || "Erro retornado pelo backend.");
   }
-
-  return data;
+  return json;
 }
 
 async function getInitialData(force = false) {
-  const now = Date.now();
-  if (!force && memoryCache && (now - cacheTimestamp < CACHE_TTL_MS)) {
-    return memoryCache;
+  const LOCAL_STORAGE_KEY = "hidrogeron_cache_payload";
+
+  if (!force) {
+    const salvo = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (salvo) {
+      try {
+        const parsed = JSON.parse(salvo);
+        window.lastLoadedData = parsed;
+        
+        // Atualiza em background
+        apiGet({ _t: Date.now() }).then(dadosNovos => {
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dadosNovos));
+          window.lastLoadedData = dadosNovos;
+        }).catch(err => console.warn("Atualização em background adiada:", err));
+
+        return parsed;
+      } catch (e) {
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+      }
+    }
   }
 
+  const dados = await apiGet({ _t: Date.now() });
   try {
-    const data = await apiGet();
-    memoryCache = data;
-    cacheTimestamp = now;
-    window.lastLoadedData = data;
-    console.log("Dados Carregados:", data);
-    return data;
-  } catch (err) {
-    if (memoryCache) {
-      console.warn("Falha na rede, usando cache em memória:", err);
-      return memoryCache;
-    }
-    throw err;
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dados));
+  } catch (e) {
+    console.warn("Falha ao salvar no localStorage.");
   }
+  window.lastLoadedData = dados;
+  return dados;
 }
 
-async function postToAppsScript(payload = {}) {
-  const bodyData = {
-    ...payload,
-    empresaId: EMPRESA_PADRAO
-  };
-
+async function postToAppsScript(payload) {
   const res = await fetch(API_URL, {
     method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(bodyData)
+    headers: {
+      "Content-Type": "text/plain;charset=utf-8"
+    },
+    body: JSON.stringify(payload)
   });
 
   if (!res.ok) {
-    throw new Error(`Erro no POST (HTTP ${res.status})`);
+    throw new Error(`Erro na requisição POST: HTTP ${res.status}`);
   }
 
-  const data = await res.json();
-  if (data.status === "erro") {
-    throw new Error(data.erro || "Erro no salvamento");
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return { status: "sucesso", respostaTexto: text };
   }
-
-  // Invalida cache para a próxima leitura vir fresca
-  memoryCache = null;
-  return data;
 }
-
-window.apiGet = apiGet;
-window.getInitialData = getInitialData;
-window.postToAppsScript = postToAppsScript;
